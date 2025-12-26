@@ -1,0 +1,23 @@
+
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["."],
+  "exclude": ["dist", "dist-server", "node_modules", "server.ts", "vite.config.ts", "postcss.config.js", "tailwind.config.js", "tsconfig.node.json", "tsconfig.server.json"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
