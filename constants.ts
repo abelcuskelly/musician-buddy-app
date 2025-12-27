@@ -1,5 +1,5 @@
 
-import { Profile } from './types'; // <-- .ts removed here
+import { Profile } from './types.js'; // <-- .js added here
 
 export const SKILL_LEVELS: ('Beginner' | 'Intermediate' | 'Advanced' | 'Expert')[] = ['Beginner', 'Intermediate', 'Advanced', 'Expert'];
 export const FEEDBACK_PREFERENCES: ('Direct and Technical' | 'Gentle and Encouraging')[] = ['Direct and Technical', 'Gentle and Encouraging'];

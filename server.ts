@@ -3,8 +3,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Chat, Content } from '@google/genai';
-import { getSystemInstruction } from './constants'; // <-- .ts removed here
-import { Profile, Message } from './types'; // <-- .ts removed here
+import { getSystemInstruction } from './constants.js'; // <-- .js added here
+import { Profile, Message } from './types.js'; // <-- .js added here
 
 const app = express();
 const PORT = process.env.PORT || 8080;
