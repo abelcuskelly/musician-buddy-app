@@ -1,10 +1,9 @@
-
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Chat, Content } from '@google/genai';
-import { getSystemInstruction } from './constants.js'; // <-- .js added here
-import { Profile, Message } from './types.js'; // <-- .js added here
+import { getSystemInstruction } from './constants.ts';
+import { Profile, Message } from './types.ts';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -19,7 +18,6 @@ const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Vite builds to `dist`, so we serve from there.
 const clientDistPath = path.join(__dirname, '..', 'dist');
 
 app.use(express.static(clientDistPath));
@@ -31,8 +29,27 @@ app.post('/api/chat', async (req, res) => {
 
     const systemInstruction = getSystemInstruction(profile);
 
-    // Convert our Message[] format to Gemini's Content[] format
-    const geminiHistory: Content[] = history.map(msg => ({
+    // --- ROBUST HISTORY SANITIZATION ---
+    // 1. Find the first user message. Gemini history MUST start with a user turn.
+    const firstUserIndex = history.findIndex(m => m.role === 'user');
+    let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
+
+    // 2. Ensure alternating roles (User -> Model -> User -> Model)
+    const alternatingHistory: Message[] = [];
+    for (const msg of sanitizedHistory) {
+      if (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role === msg.role) {
+        alternatingHistory[alternatingHistory.length - 1] = msg;
+      } else {
+        alternatingHistory.push(msg);
+      }
+    }
+
+    // 3. Ensure history ends with a 'model' turn.
+    while (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role !== 'model') {
+      alternatingHistory.pop();
+    }
+
+    const geminiHistory: Content[] = alternatingHistory.map(msg => ({
       role: msg.role,
       parts: [{ text: msg.content }]
     }));
@@ -51,18 +68,20 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Transfer-Encoding', 'chunked');
 
     for await (const chunk of stream) {
-      res.write(chunk.text);
+      if (chunk.text) {
+        res.write(chunk.text);
+      }
     }
     res.end();
 
-  } catch (error) {
-    console.error('Error in /api/chat:', error);
-    res.status(500).send('An error occurred while processing your request.');
+  } catch (error: any) {
+    console.error('Detailed Error in /api/chat:', error);
+    const status = error.status || 500;
+    const errorMessage = error.message || 'An error occurred while processing your request.';
+    res.status(status).send(errorMessage);
   }
 });
 
-// The "catchall" handler: for any request that doesn't match one above,
-// send back React's index.html file.
 app.get('*', (req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));
 });
