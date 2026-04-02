@@ -28,7 +28,7 @@ app.post('/api/chat', async (req, res) => {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
     const systemInstruction = getSystemInstruction(profile);
 
-    // Robust History Sanitization
+    // --- ROBUST HISTORY SANITIZATION ---
     const firstUserIndex = history.findIndex(m => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 

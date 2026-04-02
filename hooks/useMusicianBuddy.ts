@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
-import { useProfile } from '../context/ProfileContext.tsx';
-import { Message } from '../types.ts';
+import { useProfile } from '../context/ProfileContext.js';
+import { Message } from '../types.js';
 
 export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatch<React.SetStateAction<Message[]>>) => {
   const [error, setError] = useState<string | null>(null);
