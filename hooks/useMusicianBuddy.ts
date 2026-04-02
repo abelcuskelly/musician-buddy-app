@@ -1,10 +1,6 @@
 import { useState, useCallback } from 'react';
-import { GoogleGenAI } from '@google/genai';
-import { useProfile } from '../context/ProfileContext.js';
-import { getSystemInstruction } from '../constants.js';
-import { Message } from '../types.js';
-
-const API_KEY = "AIzaSyDL3DYnBVB3d3Udi1tUNEKIkmpRhk98TXY";
+import { useProfile } from '../context/ProfileContext.tsx';
+import { Message } from '../types.ts';
 
 export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatch<React.SetStateAction<Message[]>>) => {
   const [error, setError] = useState<string | null>(null);
@@ -19,43 +15,45 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
     setMessages(prev => [...prev, { id: modelMessageId, role: 'model', content: '', isStreaming: true }]);
 
     try {
-      const genAI = new GoogleGenAI({ apiKey: API_KEY, vertexai: true });
-      const systemInstruction = getSystemInstruction(profile);
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userInput,
+          profile,
+          history: messages
+        }),
+      });
 
-      const firstUserIndex = messages.findIndex(m => m.role === 'user');
-      let sanitizedHistory = firstUserIndex === -1 ? [] : messages.slice(firstUserIndex);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || "Server error");
+      }
 
-      const alternatingHistory: any[] = [];
-      for (const msg of sanitizedHistory) {
-        if (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role === msg.role) {
-          alternatingHistory[alternatingHistory.length - 1] = { role: msg.role, parts: [{ text: msg.content }] };
-        } else {
-          alternatingHistory.push({ role: msg.role, parts: [{ text: msg.content }] });
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fullResponse += decoder.decode(value, { stream: true });
+          setMessages(prev =>
+            prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg)
+          );
         }
       }
 
-      while (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role !== 'model') {
-        alternatingHistory.pop();
-      }
-
-      const chat = genAI.chats.create({
-        model: 'gemini-2.5-flash',
-        config: { systemInstruction },
-        history: alternatingHistory,
-      });
-
-      const result = await chat.sendMessageStream({ message: userInput });
-      
-      let fullResponse = '';
-      for await (const chunk of result) {
-        fullResponse += chunk.text;
-        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg));
-      }
-
-      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg));
+      setMessages(prev =>
+        prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg)
+      );
     } catch (e: any) {
-      setError(e.message || "Error connecting to AI.");
-      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error.", isStreaming: false } : msg));
+      console.error("Chat Error:", e);
+      setError(e.message || "Sorry, I encountered an error communicating with the server.");
+      setMessages(prev =>
+        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error communicating with server.", isStreaming: false } : msg)
+      );
     } finally {
       setIsLoading(false);
     }
