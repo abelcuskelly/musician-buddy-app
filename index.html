@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Musician Buddy</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/index.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom": "https://esm.sh/react-dom@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "@google/genai": "https://esm.sh/@google/genai@1.20.0",
+          "react-markdown": "https://esm.sh/react-markdown@9.0.1?deps=react@18.3.1",
+          "remark-gfm": "https://esm.sh/remark-gfm@4.0.0"
+        }
+      }
+    </script>
   </head>
   <body class="bg-[#11111b] text-gray-200 font-sans">
     <div id="root"></div>
