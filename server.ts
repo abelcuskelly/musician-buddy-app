@@ -13,6 +13,7 @@ if (!API_KEY) {
   throw new Error("API_KEY environment variable not set.");
 }
 
+// Mandatory initialization per instructions
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: true });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +28,7 @@ app.post('/api/chat', async (req, res) => {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
     const systemInstruction = getSystemInstruction(profile);
 
+    // Robust History Sanitization
     const firstUserIndex = history.findIndex(m => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
