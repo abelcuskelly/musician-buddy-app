@@ -17,7 +17,6 @@ const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const clientDistPath = path.join(__dirname, '..', 'dist');
 
 app.use(express.static(clientDistPath));
@@ -26,15 +25,13 @@ app.use(express.json());
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
-
     const systemInstruction = getSystemInstruction(profile);
 
-    // --- ROBUST HISTORY SANITIZATION ---
-    // 1. Find the first user message. Gemini history MUST start with a user turn.
+    // 1. Find first user message (Gemini history MUST start with user)
     const firstUserIndex = history.findIndex(m => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
-    // 2. Ensure alternating roles (User -> Model -> User -> Model)
+    // 2. Ensure alternating roles
     const alternatingHistory: Message[] = [];
     for (const msg of sanitizedHistory) {
       if (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role === msg.role) {
@@ -44,7 +41,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 3. Ensure history ends with a 'model' turn.
+    // 3. Ensure history ends with 'model' so the next message can be 'user'
     while (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role !== 'model') {
       alternatingHistory.pop();
     }
@@ -56,29 +53,22 @@ app.post('/api/chat', async (req, res) => {
 
     const chat: Chat = ai.chats.create({
       model: 'gemini-2.5-flash',
-      config: {
-        systemInstruction: systemInstruction,
-      },
+      config: { systemInstruction },
       history: geminiHistory
     });
 
     const stream = await chat.sendMessageStream({ message });
-
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     for await (const chunk of stream) {
-      if (chunk.text) {
-        res.write(chunk.text);
-      }
+      if (chunk.text) res.write(chunk.text);
     }
     res.end();
 
   } catch (error: any) {
-    console.error('Detailed Error in /api/chat:', error);
-    const status = error.status || 500;
-    const errorMessage = error.message || 'An error occurred while processing your request.';
-    res.status(status).send(errorMessage);
+    console.error('Error in /api/chat:', error);
+    res.status(500).send(error.message || 'Server Error');
   }
 });
 
@@ -87,5 +77,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
