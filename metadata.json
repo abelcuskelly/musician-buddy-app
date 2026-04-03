@@ -1,6 +1,6 @@
 {
   "name": "AI Musician Buddy",
-  "description": "A conversational AI companion for musicians. Get personalized lesson plans, songwriting assistance, technique feedback, and motivational support to achieve your musical goals.",
+  "description": "A conversational AI companion for musicians providing motivational support, lesson planning, songwriting assistance, and technique critique.",
   "requestFramePermissions": [
     "microphone"
   ]

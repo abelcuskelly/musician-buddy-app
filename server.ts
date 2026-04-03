@@ -2,8 +2,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Chat, Content } from '@google/genai';
-import { getSystemInstruction } from './constants.js';
-import { Profile, Message } from './types.js';
+import { getSystemInstruction } from './constants';
+import { Profile, Message } from './types';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -13,46 +13,34 @@ if (!API_KEY) {
   throw new Error("API_KEY environment variable not set.");
 }
 
-// Mandatory initialization per instructions
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const clientDistPath = path.join(__dirname, '..', 'dist');
 
+const clientDistPath = path.join(__dirname, '..', 'dist');
 app.use(express.static(clientDistPath));
 app.use(express.json());
 
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
+
     const systemInstruction = getSystemInstruction(profile);
 
-    // --- ROBUST HISTORY SANITIZATION ---
-    const firstUserIndex = history.findIndex(m => m.role === 'user');
-    let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
+    const firstUserTurnIndex = history.findIndex(msg => msg.role === 'user');
+    const validHistory = firstUserTurnIndex === -1 ? [] : history.slice(firstUserTurnIndex);
 
-    const alternatingHistory: Message[] = [];
-    for (const msg of sanitizedHistory) {
-      if (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role === msg.role) {
-        alternatingHistory[alternatingHistory.length - 1] = msg;
-      } else {
-        alternatingHistory.push(msg);
-      }
-    }
-
-    while (alternatingHistory.length > 0 && alternatingHistory[alternatingHistory.length - 1].role !== 'model') {
-      alternatingHistory.pop();
-    }
-
-    const geminiHistory: Content[] = alternatingHistory.map(msg => ({
+    const geminiHistory: Content[] = validHistory.map(msg => ({
       role: msg.role,
       parts: [{ text: msg.content }]
     }));
 
     const chat: Chat = ai.chats.create({
       model: 'gemini-2.5-flash',
-      config: { systemInstruction },
+      config: {
+        systemInstruction: systemInstruction,
+      },
       history: geminiHistory
     });
 
@@ -62,13 +50,13 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Transfer-Encoding', 'chunked');
 
     for await (const chunk of stream) {
-      if (chunk.text) res.write(chunk.text);
+      res.write(chunk.text);
     }
     res.end();
 
   } catch (error: any) {
-    console.error('Detailed Error in /api/chat:', error);
-    res.status(error.status || 500).json({ error: { message: error.message } });
+    console.error('Error in /api/chat:', error);
+    res.status(500).send(error.message || 'An error occurred while processing your request.');
   }
 });
 
