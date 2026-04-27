@@ -13,7 +13,6 @@ if (!API_KEY) {
   throw new Error("GEMINI_API_KEY environment variable not set.");
 }
 
-// Initialize standard Gemini API
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: false });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,31 +20,33 @@ const __dirname = path.dirname(__filename);
 const clientDistPath = path.join(__dirname, '..', 'dist');
 
 app.use(express.static(clientDistPath));
-app.use(express.json());
+// Increase limit to handle potential large text histories, though we strip audio on frontend
+app.use(express.json({ limit: '10mb' }));
 
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
-    const systemInstruction = getSystemInstruction(profile);
 
-    // --- SMART ROUTER: Intent Detection for Lyria 3 ---
-    const musicKeywords = ['generate', 'compose', 'create a song', 'write a song', 'make a tune', 'audio clip', 'produce a track', 'create a beat'];
-    const isMusicRequest = musicKeywords.some((kw: string) => message.toLowerCase().includes(kw));
-    const isClipRequest = message.toLowerCase().includes('clip') || message.toLowerCase().includes('30 second') || message.toLowerCase().includes('loop');
+    // --- SMART ROUTER: Refined Intent Detection ---
+    // We only trigger Lyria if the user explicitly asks to "generate the audio" or "produce the track"
+    // after the planning phase is complete.
+    const triggerKeywords = ['generate the audio', 'produce the track', 'generate the song now', 'create the mp3', 'generate the clip now'];
+    const isExecutionRequest = triggerKeywords.some(kw => message.toLowerCase().includes(kw));
 
-    if (isMusicRequest) {
-      const modelId = isClipRequest ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
-      console.log(`[Router] Routing to ${modelId} for music generation...`);
+    if (isExecutionRequest) {
+      const isClip = message.toLowerCase().includes('clip') || message.toLowerCase().includes('30 second');
+      const modelId = isClip ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
+      
+      console.log(`[Router] Handing off to ${modelId} for final generation...`);
 
       const result = await ai.models.generateContent({
         model: modelId,
         contents: [{
           role: 'user',
           parts: [{ 
-            text: `Generate music based on this request: ${message}. 
-            User Context: ${profile?.skillLevel || 'Beginner'} ${profile?.instrument || 'musician'}. 
-            Genres: ${profile?.musicGenres || 'various'}.
-            Ensure high-fidelity 44.1kHz output. Include lyrics and structure in the text response.` 
+            text: `Final Production Request: ${message}. 
+            Context: ${profile?.skillLevel} ${profile?.instrument} player. 
+            Please generate the high-fidelity 44.1kHz audio track now based on our previous planning.` 
           }]
         }]
       });
@@ -53,26 +54,21 @@ app.post('/api/chat', async (req, res) => {
       let audioBase64 = "";
       let textContent = "";
 
-      // Parse multimodal outputs safely with explicit type narrowing
-      const parts = result.candidates?.[0]?.content?.parts;
-      if (parts) {
-        for (const part of parts) {
-          if (typeof part.text === 'string') {
-            textContent += part.text;
-          }
-          if (part.inlineData && typeof part.inlineData.data === 'string') {
-            audioBase64 = part.inlineData.data;
-          }
+      if (result.candidates?.[0]?.content?.parts) {
+        for (const part of result.candidates[0].content.parts) {
+          if (part.text) textContent += part.text;
+          if (part.inlineData) audioBase64 = part.inlineData.data;
         }
       }
 
       return res.json({
-        content: textContent || "Composition complete! You can listen to or download your track below.",
+        content: textContent || "Your track has been produced! Listen or download below.",
         audioData: audioBase64
       });
     }
 
-    // --- CONVERSATIONAL PATH: Gemini 3.1 Pro ---
+    // --- CONVERSATIONAL PATH: Gemini 3.1 Pro (The Producer) ---
+    const systemInstruction = getSystemInstruction(profile);
     const firstUserIndex = history.findIndex((m: Message) => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
@@ -110,8 +106,8 @@ app.post('/api/chat', async (req, res) => {
     res.end();
 
   } catch (error: any) {
-    console.error('Detailed Error in /api/chat:', error);
-    res.status(500).json({ error: { message: error.message || 'An error occurred' } });
+    console.error('Error in /api/chat:', error);
+    res.status(500).json({ error: { message: error.message } });
   }
 });
 

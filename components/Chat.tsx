@@ -38,17 +38,28 @@ const Chat: React.FC = () => {
   const handleSendMessage = (input: string) => {
     if (!input.trim() || isLoading) return;
     
-    // Fix: Use a unique ID with a prefix and random string to avoid collisions
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 7);
+    
     const userMessage: MessageType = { 
-      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, 
+      id: `user-${timestamp}-${randomStr}`, 
       role: 'user', 
       content: input 
     };
+
+    const modelMessageId = `model-${timestamp}-${randomStr}`;
+    const modelPlaceholder: MessageType = {
+      id: modelMessageId,
+      role: 'model',
+      content: '',
+      isStreaming: true
+    };
     
-    // Trigger the API call with the current history
-    sendMessage(input);
-    // Optimistically add the user message to the UI
-    setMessages(prev => [...prev, userMessage]);
+    // Add both messages to state at once to guarantee order (User then Model)
+    setMessages(prev => [...prev, userMessage, modelPlaceholder]);
+    
+    // Trigger the API call
+    sendMessage(input, modelMessageId);
   };
 
   return (
