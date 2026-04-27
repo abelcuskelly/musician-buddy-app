@@ -23,19 +23,24 @@ const Message: React.FC<MessageProps> = ({ message }) => {
         </ReactMarkdown>
         
         {message.audioData && (
-          <div className="mt-4 p-3 bg-[#181825] rounded-xl border border-gray-700">
-            <p className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">Generated Audio</p>
-            <audio controls className="w-full h-8">
-              <source src={`data:audio/wav;base64,${message.audioData}`} type="audio/wav" />
+          <div className="mt-4 p-4 bg-[#181825] rounded-xl border border-gray-700 shadow-inner">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-[#cba6f7] uppercase tracking-widest flex items-center gap-2">
+                <span className="w-2 h-2 bg-[#cba6f7] rounded-full animate-ping"></span>
+                Lyria 3 Generated Audio
+              </span>
+              <a 
+                href={`data:audio/mp3;base64,${message.audioData}`} 
+                download="musician-buddy-composition.mp3"
+                className="text-xs text-[#89b4fa] hover:text-[#b4befe] transition-colors flex items-center gap-1 font-medium"
+              >
+                Download MP3
+              </a>
+            </div>
+            <audio controls className="w-full h-10">
+              <source src={`data:audio/mp3;base64,${message.audioData}`} type="audio/mp3" />
               Your browser does not support the audio element.
             </audio>
-            <a 
-              href={`data:audio/wav;base64,${message.audioData}`} 
-              download="musician-buddy-track.wav"
-              className="mt-2 inline-block text-xs text-[#89b4fa] hover:underline"
-            >
-              Download Track
-            </a>
           </div>
         )}
       </div>

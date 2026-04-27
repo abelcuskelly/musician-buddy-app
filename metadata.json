@@ -1,6 +1,6 @@
 {
   "name": "AI Musician Buddy",
-  "description": "A conversational AI companion for musicians using Gemini 3.1 Pro. Get personalized lesson plans, songwriting assistance, and technique feedback.",
+  "description": "A conversational AI companion for musicians using Gemini 3.1 Pro and Lyria 3 Pro for high-fidelity music generation.",
   "requestFramePermissions": [
     "microphone"
   ]

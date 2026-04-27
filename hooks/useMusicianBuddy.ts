@@ -11,7 +11,7 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
     setIsLoading(true);
     setError(null);
 
-    const modelMessageId = `model-${Date.now()}`;
+    const modelMessageId = `model-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     setMessages(prev => [...prev, { id: modelMessageId, role: 'model', content: '', isStreaming: true }]);
 
     try {
@@ -23,15 +23,12 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
 
       const contentType = response.headers.get('Content-Type');
 
-      // Handle JSON Response (Music Generation)
       if (contentType?.includes('application/json')) {
         const data = await response.json();
         setMessages(prev => prev.map(msg => 
           msg.id === modelMessageId ? { ...msg, content: data.content, audioData: data.audioData, isStreaming: false } : msg
         ));
-      } 
-      // Handle Stream Response (Standard Chat)
-      else {
+      } else {
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let fullResponse = '';
@@ -41,9 +38,7 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
             const { done, value } = await reader.read();
             if (done) break;
             fullResponse += decoder.decode(value, { stream: true });
-            setMessages(prev => prev.map(msg => 
-              msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg
-            ));
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg));
           }
         }
         setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg));

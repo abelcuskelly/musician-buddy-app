@@ -25,37 +25,44 @@ app.use(express.json());
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
-    
-    // 1. Intent Detection: Is the user asking to generate music?
-    const musicKeywords = ['generate', 'compose', 'write a song', 'create a tune', 'make a beat', 'audio clip', 'lyrics for'];
-    const isMusicRequest = musicKeywords.some(kw => message.toLowerCase().includes(msg => message.toLowerCase().includes(kw)));
+
+    // --- INTENT DETECTION FOR LYRIA 3 ---
+    const musicKeywords = ['generate', 'compose', 'write a song', 'create a tune', 'make a beat', 'audio clip', 'produce a track'];
+    const isMusicRequest = musicKeywords.some(kw => message.toLowerCase().includes(kw));
+    const isClipRequest = message.toLowerCase().includes('clip') || message.toLowerCase().includes('short') || message.toLowerCase().includes('30 second');
 
     if (isMusicRequest) {
-      console.log("[Router] Routing to Lyria 3 for music generation...");
-      
-      // Call Lyria 3 (or the audio-capable Gemini model)
-      const musicModel = ai.getGenerativeModel({ model: "gemini-2.0-flash" }); // Lyria capabilities are integrated here
-      const result = await musicModel.generateContent([
-        { text: `Generate high-fidelity audio and lyrics based on this request: ${message}. Context: User plays ${profile?.instrument} at ${profile?.skillLevel} level.` }
-      ]);
+      const modelId = isClipRequest ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
+      console.log(`[Router] Routing to ${modelId} for music generation...`);
 
-      const response = result.response;
+      const result = await ai.models.generateContent({
+        model: modelId,
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Generate music based on this request: ${message}. User Context: ${profile?.skillLevel} ${profile?.instrument} player.` }]
+        }]
+      });
+
       let audioBase64 = "";
-      
-      // Extract audio data if present in the multimodal response
-      const audioPart = response.candidates?.[0]?.content?.parts.find(p => p.inlineData?.mimeType?.startsWith('audio/'));
-      if (audioPart) {
-        audioBase64 = audioPart.inlineData.data;
+      let textContent = "";
+
+      if (result.candidates?.[0]?.content?.parts) {
+        for (const part of result.candidates[0].content.parts) {
+          if (part.text) {
+            textContent += part.text;
+          } else if (part.inlineData) {
+            audioBase64 = part.inlineData.data;
+          }
+        }
       }
 
-      // Return structured JSON for music generation
       return res.json({
-        content: response.text(),
+        content: textContent || "Here is your generated music!",
         audioData: audioBase64
       });
     }
 
-    // 2. Standard Conversational Path (Gemini 3.1 Pro)
+    // --- CONVERSATIONAL PATH: Gemini 3.1 Pro ---
     const systemInstruction = getSystemInstruction(profile);
     const firstUserIndex = history.findIndex(m => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
