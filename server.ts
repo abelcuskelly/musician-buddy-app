@@ -26,6 +26,7 @@ app.use(express.json());
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
+    const systemInstruction = getSystemInstruction(profile);
 
     // --- SMART ROUTER: Intent Detection for Lyria 3 ---
     const musicKeywords = ['generate', 'compose', 'create a song', 'write a song', 'make a tune', 'audio clip', 'produce a track', 'create a beat'];
@@ -36,7 +37,6 @@ app.post('/api/chat', async (req, res) => {
       const modelId = isClipRequest ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
       console.log(`[Router] Routing to ${modelId} for music generation...`);
 
-      // Use generateContent as per Lyria 3 documentation
       const result = await ai.models.generateContent({
         model: modelId,
         contents: [{
@@ -53,12 +53,14 @@ app.post('/api/chat', async (req, res) => {
       let audioBase64 = "";
       let textContent = "";
 
-      // Parse multimodal outputs from the response parts
-      if (result.candidates?.[0]?.content?.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.text) {
+      // Parse multimodal outputs safely with explicit type narrowing
+      const parts = result.candidates?.[0]?.content?.parts;
+      if (parts) {
+        for (const part of parts) {
+          if (typeof part.text === 'string') {
             textContent += part.text;
-          } else if (part.inlineData) {
+          }
+          if (part.inlineData && typeof part.inlineData.data === 'string') {
             audioBase64 = part.inlineData.data;
           }
         }
@@ -71,7 +73,6 @@ app.post('/api/chat', async (req, res) => {
     }
 
     // --- CONVERSATIONAL PATH: Gemini 3.1 Pro ---
-    const systemInstruction = getSystemInstruction(profile);
     const firstUserIndex = history.findIndex((m: Message) => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
@@ -109,8 +110,8 @@ app.post('/api/chat', async (req, res) => {
     res.end();
 
   } catch (error: any) {
-    console.error('Error in /api/chat:', error);
-    res.status(500).json({ error: { message: error.message } });
+    console.error('Detailed Error in /api/chat:', error);
+    res.status(500).json({ error: { message: error.message || 'An error occurred' } });
   }
 });
 
