@@ -26,45 +26,42 @@ app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
 
-    // --- INTENT DETECTION FOR LYRIA 3 ---
-    const musicKeywords = ['generate', 'compose', 'write a song', 'create a tune', 'make a beat', 'audio clip', 'produce a track'];
-    const isMusicRequest = musicKeywords.some(kw => message.toLowerCase().includes(kw));
-    const isClipRequest = message.toLowerCase().includes('clip') || message.toLowerCase().includes('short') || message.toLowerCase().includes('30 second');
+    // --- SMART ROUTER: Intent Detection for Lyria 3 ---
+    const musicKeywords = ['generate', 'compose', 'create a song', 'write a song', 'make a tune', 'audio clip', 'produce a track', 'create a beat'];
+    const isMusicRequest = musicKeywords.some((kw: string) => message.toLowerCase().includes(kw));
+    const isClipRequest = message.toLowerCase().includes('clip') || message.toLowerCase().includes('30 second') || message.toLowerCase().includes('loop');
 
     if (isMusicRequest) {
       const modelId = isClipRequest ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
-      console.log(`[Router] Routing to ${modelId} for music generation...`);
+      console.log(`[Router] Using Interactions API with ${modelId}...`);
 
-      const result = await ai.models.generateContent({
+      // Use the Interactions API as per Lyria 3 documentation
+      const interaction = await ai.interactions.create({
         model: modelId,
-        contents: [{
-          role: 'user',
-          parts: [{ text: `Generate music based on this request: ${message}. User Context: ${profile?.skillLevel} ${profile?.instrument} player.` }]
-        }]
+        input: `User Request: ${message}. Context: ${profile?.skillLevel} ${profile?.instrument} player. Genres: ${profile?.musicGenres}. Ensure high-fidelity 44.1kHz output.`
       });
 
       let audioBase64 = "";
       let textContent = "";
 
-      if (result.candidates?.[0]?.content?.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.text) {
-            textContent += part.text;
-          } else if (part.inlineData) {
-            audioBase64 = part.inlineData.data;
-          }
+      // Parse multimodal outputs from the interaction
+      for (const output of interaction.outputs) {
+        if (output.text) {
+          textContent += output.text;
+        } else if (output.inlineData) {
+          audioBase64 = output.inlineData.data;
         }
       }
 
       return res.json({
-        content: textContent || "Here is your generated music!",
+        content: textContent || "Composition complete! You can listen to or download your track below.",
         audioData: audioBase64
       });
     }
 
     // --- CONVERSATIONAL PATH: Gemini 3.1 Pro ---
     const systemInstruction = getSystemInstruction(profile);
-    const firstUserIndex = history.findIndex(m => m.role === 'user');
+    const firstUserIndex = history.findIndex((m: Message) => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
     const alternatingHistory: Message[] = [];
@@ -80,7 +77,7 @@ app.post('/api/chat', async (req, res) => {
       alternatingHistory.pop();
     }
 
-    const geminiHistory: Content[] = alternatingHistory.map(msg => ({
+    const geminiHistory: Content[] = alternatingHistory.map((msg: Message) => ({
       role: msg.role,
       parts: [{ text: msg.content }]
     }));
