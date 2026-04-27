@@ -8,12 +8,12 @@ import { Profile, Message } from './types.js';
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-const API_KEY = process.env.API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY;
 if (!API_KEY) {
-  throw new Error("API_KEY environment variable not set.");
+  throw new Error("GEMINI_API_KEY environment variable not set.");
 }
 
-// INITIALIZATION: vertexai set to false for standard Gemini API
+// vertexai: false uses standard API Key authentication
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: false });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -50,7 +50,7 @@ app.post('/api/chat', async (req, res) => {
     }));
 
     const chat: Chat = ai.chats.create({
-      model: 'gemini-2.5-flash', // Using the latest high-performance model
+      model: 'gemini-3.1-pro-preview',
       config: { systemInstruction },
       history: geminiHistory
     });
@@ -66,7 +66,7 @@ app.post('/api/chat', async (req, res) => {
 
   } catch (error: any) {
     console.error('Error in /api/chat:', error);
-    res.status(500).send(error.message || 'Server Error');
+    res.status(500).json({ error: { message: error.message } });
   }
 });
 

@@ -15,7 +15,10 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
     setMessages(prev => [...prev, { id: modelMessageId, role: 'model', content: '', isStreaming: true }]);
 
     try {
-      const response = await fetch('/api/chat', {
+      const baseUrl = window.location.origin;
+      const apiUrl = `${baseUrl}/api/chat`.replace(/([^:]\/)\/+/g, "$1");
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -49,10 +52,9 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
         prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg)
       );
     } catch (e: any) {
-      console.error("Chat Error:", e);
       setError(e.message || "Sorry, I encountered an error communicating with the server.");
       setMessages(prev =>
-        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error communicating with server.", isStreaming: false } : msg)
+        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error.", isStreaming: false } : msg)
       );
     } finally {
       setIsLoading(false);
