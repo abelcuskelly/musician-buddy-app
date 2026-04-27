@@ -1,13 +1,12 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { useMusicianBuddy } from '../hooks/useMusicianBuddy.ts';
-import { useProfile } from '../context/ProfileContext.tsx';
-import { Message as MessageType } from '../types.ts';
-import Message from './Message.tsx';
-import UserInput from './UserInput.tsx';
-import SettingsModal from './SettingsModal.tsx';
-import SettingsIcon from './icons/SettingsIcon.tsx';
-import BotIcon from './icons/BotIcon.tsx';
+import { useMusicianBuddy } from '../hooks/useMusicianBuddy.js';
+import { useProfile } from '../context/ProfileContext.js';
+import { Message as MessageType } from '../types.js';
+import Message from './Message.js';
+import UserInput from './UserInput.js';
+import SettingsModal from './SettingsModal.js';
+import SettingsIcon from './icons/SettingsIcon.js';
+import BotIcon from './icons/BotIcon.js';
 
 const Chat: React.FC = () => {
   const [messages, setMessages] = useState<MessageType[]>([]);
@@ -39,11 +38,16 @@ const Chat: React.FC = () => {
   const handleSendMessage = (input: string) => {
     if (!input.trim() || isLoading) return;
     
-    const userMessage: MessageType = { id: Date.now().toString(), role: 'user', content: input };
+    // Fix: Use a unique ID with a prefix and random string to avoid collisions
+    const userMessage: MessageType = { 
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, 
+      role: 'user', 
+      content: input 
+    };
     
-    // The hook uses the `messages` state as it exists right before this call.
-    // Then, we update the UI optimistically with the user's new message.
+    // Trigger the API call with the current history
     sendMessage(input);
+    // Optimistically add the user message to the UI
     setMessages(prev => [...prev, userMessage]);
   };
 
@@ -67,10 +71,8 @@ const Chat: React.FC = () => {
 
       <main className="flex-1 overflow-y-auto p-6 space-y-6">
         {messages.map((msg) => (
-          // Render all messages, including the optimistic user message and the streaming model message
           <Message key={msg.id} message={msg} />
         ))}
-        {/* The loading indicator is now implicitly handled by the streaming message placeholder */}
         <div ref={messagesEndRef} />
       </main>
 

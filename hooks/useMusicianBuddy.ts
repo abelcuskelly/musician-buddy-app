@@ -11,7 +11,10 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
     setIsLoading(true);
     setError(null);
 
-    const modelMessageId = Date.now().toString();
+    // Fix: Use a unique ID with a prefix and random string to avoid collisions
+    const modelMessageId = `model-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    
+    // Add the empty model message placeholder to the history
     setMessages(prev => [...prev, { id: modelMessageId, role: 'model', content: '', isStreaming: true }]);
 
     try {
@@ -29,8 +32,14 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "Server error");
+        let errorMessage = "Server error";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error?.message || errorMessage;
+        } catch (e) {
+          errorMessage = await response.text() || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const reader = response.body?.getReader();
@@ -42,19 +51,26 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
           const { done, value } = await reader.read();
           if (done) break;
           fullResponse += decoder.decode(value, { stream: true });
+          
+          // Update the specific model message by ID in the state
           setMessages(prev =>
             prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg)
           );
         }
       }
 
+      // Mark streaming as finished for this specific message
       setMessages(prev =>
         prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg)
       );
     } catch (e: any) {
-      setError(e.message || "Sorry, I encountered an error communicating with the server.");
+      console.error("Chat Error:", e);
+      const errorMsg = e.message || "Sorry, I encountered an error communicating with the server.";
+      setError(errorMsg);
+      
+      // Update the placeholder with the error message
       setMessages(prev =>
-        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error.", isStreaming: false } : msg)
+        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: errorMsg, isStreaming: false } : msg)
       );
     } finally {
       setIsLoading(false);
