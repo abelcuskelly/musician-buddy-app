@@ -20,16 +20,14 @@ const __dirname = path.dirname(__filename);
 const clientDistPath = path.join(__dirname, '..', 'dist');
 
 app.use(express.static(clientDistPath));
-// Increase limit to handle potential large text histories, though we strip audio on frontend
 app.use(express.json({ limit: '10mb' }));
 
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
 
-    // --- SMART ROUTER: Refined Intent Detection ---
-    // We only trigger Lyria if the user explicitly asks to "generate the audio" or "produce the track"
-    // after the planning phase is complete.
+    // --- SMART ROUTER: Producer Workflow ---
+    // Only trigger Lyria if the user explicitly asks to produce/generate the final audio
     const triggerKeywords = ['generate the audio', 'produce the track', 'generate the song now', 'create the mp3', 'generate the clip now'];
     const isExecutionRequest = triggerKeywords.some(kw => message.toLowerCase().includes(kw));
 
@@ -54,10 +52,17 @@ app.post('/api/chat', async (req, res) => {
       let audioBase64 = "";
       let textContent = "";
 
-      if (result.candidates?.[0]?.content?.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.text) textContent += part.text;
-          if (part.inlineData) audioBase64 = part.inlineData.data;
+      const parts = result.candidates?.[0]?.content?.parts;
+      if (parts) {
+        for (const part of parts) {
+          const text = part.text;
+          if (typeof text === 'string') {
+            textContent += text;
+          }
+          const data = part.inlineData?.data;
+          if (typeof data === 'string') {
+            audioBase64 = data;
+          }
         }
       }
 
@@ -107,7 +112,7 @@ app.post('/api/chat', async (req, res) => {
 
   } catch (error: any) {
     console.error('Error in /api/chat:', error);
-    res.status(500).json({ error: { message: error.message } });
+    res.status(500).json({ error: { message: error.message || 'An error occurred' } });
   }
 });
 
