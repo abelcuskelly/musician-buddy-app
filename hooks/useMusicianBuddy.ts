@@ -11,67 +11,46 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
     setIsLoading(true);
     setError(null);
 
-    // Fix: Use a unique ID with a prefix and random string to avoid collisions
-    const modelMessageId = `model-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
-    
-    // Add the empty model message placeholder to the history
+    const modelMessageId = `model-${Date.now()}`;
     setMessages(prev => [...prev, { id: modelMessageId, role: 'model', content: '', isStreaming: true }]);
 
     try {
-      const baseUrl = window.location.origin;
-      const apiUrl = `${baseUrl}/api/chat`.replace(/([^:]\/)\/+/g, "$1");
-
-      const response = await fetch(apiUrl, {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userInput,
-          profile,
-          history: messages
-        }),
+        body: JSON.stringify({ message: userInput, profile, history: messages }),
       });
 
-      if (!response.ok) {
-        let errorMessage = "Server error";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error?.message || errorMessage;
-        } catch (e) {
-          errorMessage = await response.text() || errorMessage;
+      const contentType = response.headers.get('Content-Type');
+
+      // Handle JSON Response (Music Generation)
+      if (contentType?.includes('application/json')) {
+        const data = await response.json();
+        setMessages(prev => prev.map(msg => 
+          msg.id === modelMessageId ? { ...msg, content: data.content, audioData: data.audioData, isStreaming: false } : msg
+        ));
+      } 
+      // Handle Stream Response (Standard Chat)
+      else {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = '';
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            fullResponse += decoder.decode(value, { stream: true });
+            setMessages(prev => prev.map(msg => 
+              msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg
+            ));
+          }
         }
-        throw new Error(errorMessage);
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg));
       }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let fullResponse = '';
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          fullResponse += decoder.decode(value, { stream: true });
-          
-          // Update the specific model message by ID in the state
-          setMessages(prev =>
-            prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullResponse } : msg)
-          );
-        }
-      }
-
-      // Mark streaming as finished for this specific message
-      setMessages(prev =>
-        prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg)
-      );
     } catch (e: any) {
-      console.error("Chat Error:", e);
-      const errorMsg = e.message || "Sorry, I encountered an error communicating with the server.";
-      setError(errorMsg);
-      
-      // Update the placeholder with the error message
-      setMessages(prev =>
-        prev.map(msg => msg.id === modelMessageId ? { ...msg, content: errorMsg, isStreaming: false } : msg)
-      );
+      setError("Error communicating with server.");
+      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: "Error.", isStreaming: false } : msg));
     } finally {
       setIsLoading(false);
     }

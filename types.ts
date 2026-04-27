@@ -1,4 +1,3 @@
-
 export type SkillLevel = 'Beginner' | 'Intermediate' | 'Advanced' | 'Expert';
 export type FeedbackPreference = 'Direct and Technical' | 'Gentle and Encouraging';
 
@@ -16,5 +15,6 @@ export interface Message {
   id: string;
   role: ChatRole;
   content: string;
+  audioData?: string; // Base64 encoded audio
   isStreaming?: boolean;
 }

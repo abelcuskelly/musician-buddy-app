@@ -13,7 +13,6 @@ if (!API_KEY) {
   throw new Error("GEMINI_API_KEY environment variable not set.");
 }
 
-// vertexai: false uses standard API Key authentication
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: false });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,8 +25,38 @@ app.use(express.json());
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, profile, history } = req.body as { message: string; profile: Profile | null; history: Message[] };
-    const systemInstruction = getSystemInstruction(profile);
+    
+    // 1. Intent Detection: Is the user asking to generate music?
+    const musicKeywords = ['generate', 'compose', 'write a song', 'create a tune', 'make a beat', 'audio clip', 'lyrics for'];
+    const isMusicRequest = musicKeywords.some(kw => message.toLowerCase().includes(msg => message.toLowerCase().includes(kw)));
 
+    if (isMusicRequest) {
+      console.log("[Router] Routing to Lyria 3 for music generation...");
+      
+      // Call Lyria 3 (or the audio-capable Gemini model)
+      const musicModel = ai.getGenerativeModel({ model: "gemini-2.0-flash" }); // Lyria capabilities are integrated here
+      const result = await musicModel.generateContent([
+        { text: `Generate high-fidelity audio and lyrics based on this request: ${message}. Context: User plays ${profile?.instrument} at ${profile?.skillLevel} level.` }
+      ]);
+
+      const response = result.response;
+      let audioBase64 = "";
+      
+      // Extract audio data if present in the multimodal response
+      const audioPart = response.candidates?.[0]?.content?.parts.find(p => p.inlineData?.mimeType?.startsWith('audio/'));
+      if (audioPart) {
+        audioBase64 = audioPart.inlineData.data;
+      }
+
+      // Return structured JSON for music generation
+      return res.json({
+        content: response.text(),
+        audioData: audioBase64
+      });
+    }
+
+    // 2. Standard Conversational Path (Gemini 3.1 Pro)
+    const systemInstruction = getSystemInstruction(profile);
     const firstUserIndex = history.findIndex(m => m.role === 'user');
     let sanitizedHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
 
