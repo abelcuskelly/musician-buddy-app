@@ -13,6 +13,7 @@ if (!API_KEY) {
   throw new Error("GEMINI_API_KEY environment variable not set.");
 }
 
+// Initialize standard Gemini API
 const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: false });
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,23 +34,33 @@ app.post('/api/chat', async (req, res) => {
 
     if (isMusicRequest) {
       const modelId = isClipRequest ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
-      console.log(`[Router] Using Interactions API with ${modelId}...`);
+      console.log(`[Router] Routing to ${modelId} for music generation...`);
 
-      // Use the Interactions API as per Lyria 3 documentation
-      const interaction = await ai.interactions.create({
+      // Use generateContent as per Lyria 3 documentation
+      const result = await ai.models.generateContent({
         model: modelId,
-        input: `User Request: ${message}. Context: ${profile?.skillLevel} ${profile?.instrument} player. Genres: ${profile?.musicGenres}. Ensure high-fidelity 44.1kHz output.`
+        contents: [{
+          role: 'user',
+          parts: [{ 
+            text: `Generate music based on this request: ${message}. 
+            User Context: ${profile?.skillLevel || 'Beginner'} ${profile?.instrument || 'musician'}. 
+            Genres: ${profile?.musicGenres || 'various'}.
+            Ensure high-fidelity 44.1kHz output. Include lyrics and structure in the text response.` 
+          }]
+        }]
       });
 
       let audioBase64 = "";
       let textContent = "";
 
-      // Parse multimodal outputs from the interaction
-      for (const output of interaction.outputs) {
-        if (output.text) {
-          textContent += output.text;
-        } else if (output.inlineData) {
-          audioBase64 = output.inlineData.data;
+      // Parse multimodal outputs from the response parts
+      if (result.candidates?.[0]?.content?.parts) {
+        for (const part of result.candidates[0].content.parts) {
+          if (part.text) {
+            textContent += part.text;
+          } else if (part.inlineData) {
+            audioBase64 = part.inlineData.data;
+          }
         }
       }
 
