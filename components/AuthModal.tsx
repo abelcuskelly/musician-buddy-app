@@ -9,6 +9,10 @@ interface AuthModalProps {
   onClose: () => void;
 }
 
+// Apple sign-in is hidden until an Apple Developer account is set up
+// (the provider also needs to be configured in the Firebase Console).
+const APPLE_SIGN_IN_ENABLED = false;
+
 const friendlyAuthError = (error: any): string => {
   const code: string = error?.code || '';
   switch (code) {
@@ -120,15 +124,17 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             Continue with Google
           </button>
 
-          <button
-            type="button"
-            onClick={() => runAuthAction(signInWithApple)}
-            disabled={isSubmitting || !isFirebaseConfigured}
-            className={`${providerButtonClass} bg-black text-white border border-gray-600 hover:bg-gray-900`}
-          >
-            <AppleIcon className="w-5 h-5" />
-            Continue with Apple
-          </button>
+          {APPLE_SIGN_IN_ENABLED && (
+            <button
+              type="button"
+              onClick={() => runAuthAction(signInWithApple)}
+              disabled={isSubmitting || !isFirebaseConfigured}
+              className={`${providerButtonClass} bg-black text-white border border-gray-600 hover:bg-gray-900`}
+            >
+              <AppleIcon className="w-5 h-5" />
+              Continue with Apple
+            </button>
+          )}
 
           <div className="flex items-center gap-3">
             <div className="flex-1 h-px bg-gray-700/70"></div>

@@ -11,8 +11,10 @@ This application is built with a secure, scalable architecture designed for prod
 *   **Technique Critique:** Provides constructive feedback on musical techniques, song structure, and notation.
 *   **Motivational Support:** Acts as a supportive coach and jam buddy, providing encouragement in a user-defined tone.
 *   **Voice Interaction:** Includes a voice-to-text feature for hands-free interaction.
-*   **User Accounts:** Sign in with Google, Apple, or Email + Password (via Firebase Authentication).
+*   **User Accounts:** Sign in with Google or Email + Password (via Firebase Authentication). Apple sign-in is built but hidden until an Apple Developer account is configured.
 *   **Personal Library:** Save generated lesson plans, songs, and audio clips to your profile, then browse, play, re-download, or delete them from any device. Lesson plans and songs can also be downloaded as Markdown files.
+*   **Lyric & Chord Sheets:** Every song written in chat is notated with chords inline, and every generated audio track comes with its own lyric & chord sheet that can be downloaded or saved.
+*   **Sharing:** One click creates a public link (e.g. `/share/abc123`) for any lesson plan, song sheet, or audio track. The share page plays the audio and displays the sheet — shared songs always include their lyrics + chords.
 
 ## Tech Stack
 

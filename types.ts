@@ -16,6 +16,7 @@ export interface Message {
   role: ChatRole;
   content: string;
   audioData?: string; // Base64 encoded audio
+  lyricsSheet?: string; // Markdown lyric & chord sheet for generated audio
   isStreaming?: boolean;
 }
 

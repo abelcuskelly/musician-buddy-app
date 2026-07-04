@@ -1,115 +1,72 @@
-# User Accounts Setup (Firebase)
+# User Accounts & Sharing Setup (Firebase)
 
-The app uses **Firebase Authentication** for sign-in (Google, Apple, and Email + Password),
-**Cloud Firestore** for storing user profiles and saved lesson plans / songs, and
-**Firebase Storage** for saved audio clips.
+The app uses **Firebase Authentication** for sign-in (Google and Email + Password;
+Apple is hidden until an Apple Developer account is available), **Cloud Firestore**
+for user profiles, saved library items, and shared content, and **Firebase Storage**
+for audio files.
 
-Until Firebase is configured, the app still works fully for chat and downloads — the
-Sign In button simply shows a "not configured" notice.
+## Current status (provisioned July 2026)
 
-## 1. Create a Firebase project
+Firebase is attached to the existing Google Cloud project **`api-connector-mcp`**
+(the same project that runs the Cloud Run service), so no extra billing setup was needed.
 
-1. Go to the [Firebase Console](https://console.firebase.google.com/) and click **Add project**.
-   - Tip: you can attach Firebase to the *same* Google Cloud project that runs the app on Cloud Run.
-2. In the project, click the **Web** icon (`</>`) to register a web app.
-3. Copy the config values shown (apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId).
-
-## 2. Enable sign-in providers
-
-In **Build → Authentication → Sign-in method**, enable:
-
-| Provider | Notes |
+| Resource | Value |
 | --- | --- |
-| **Email/Password** | Just toggle it on. |
-| **Google** | Toggle on and pick a support email. |
-| **Apple** | Requires an [Apple Developer account](https://developer.apple.com/). Create a Services ID + private key in the Apple Developer portal and paste them into the Firebase provider form ([Firebase docs](https://firebase.google.com/docs/auth/web/apple)). |
+| Firebase project | `api-connector-mcp` |
+| Web app | "Jam Buddy Web" (`1:243585371458:web:bd84887488704900e20cdb`) |
+| Firestore | Native mode, `nam5` (US multi-region) |
+| Storage bucket | `api-connector-mcp.firebasestorage.app` (us-central1) |
+| Email/Password provider | Enabled |
+| Google provider | Needs one console toggle (see below) |
+| Apple provider | Deferred (needs Apple Developer account) |
+| Authorized domains | localhost, firebaseapp.com/web.app defaults, the Cloud Run URL, jambud.co |
 
-Also add your domains (e.g. `jambud.co`, your Cloud Run URL, and `localhost`) under
-**Authentication → Settings → Authorized domains**.
+The web config values live in `.env` (`VITE_FIREBASE_*`, see `.env.example`) and are
+also hardcoded as fallbacks in `lib/firebase.ts` — the Firebase *web* config is public
+by design; all access control comes from the security rules and authorized domains.
 
-## 3. Create Firestore and Storage
+### Remaining manual step: enable the Google provider
 
-1. **Build → Firestore Database → Create database** (production mode).
-2. **Build → Storage → Get started**.
+Enabling Google sign-in auto-provisions an OAuth client, which Google does not expose
+through any public API — it requires a one-time console step (~30 seconds):
 
-### Security rules
+1. Open [Authentication → Sign-in method](https://console.firebase.google.com/project/api-connector-mcp/authentication/providers).
+2. Click **Google** → toggle **Enable** → pick a support email → **Save**.
 
-Firestore rules (**Firestore Database → Rules**) — each user can only touch their own data:
+Until then, the "Continue with Google" button will return an
+"operation not allowed" error; Email + Password sign-in already works.
 
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-      match /library/{itemId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
-      }
-    }
-  }
-}
-```
+### Enabling Apple later
 
-Storage rules (**Storage → Rules**) — audio files are private per user:
+1. Get an [Apple Developer account](https://developer.apple.com/) and create a
+   Services ID + private key ([Firebase docs](https://firebase.google.com/docs/auth/web/apple)).
+2. Enable the Apple provider in the Firebase Console with those values.
+3. Flip `APPLE_SIGN_IN_ENABLED` to `true` in `components/AuthModal.tsx`.
 
-```
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /users/{userId}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-  }
-}
-```
+## Security rules
 
-## 4. Configure the app
+Rules are version-controlled in this repo — `firestore.rules` and `storage.rules` —
+and were deployed via the Firebase Rules API. Summary:
 
-### Local development
+- `users/{uid}` and `users/{uid}/library/**`: readable/writable only by that signed-in user.
+- Everything else (including `shares/**`): **no client access**. Shared content is
+  written and read exclusively by the backend using the Admin SDK.
 
-Add the values to your `.env` file (see `.env.example`):
+To redeploy rules after editing, use the Firebase CLI (`firebase deploy --only firestore:rules,storage`)
+or the Rules REST API.
 
-```
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=your-project
-VITE_FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-```
+## Sharing architecture
 
-Restart `npm run dev` after changing `.env`.
+- `POST /api/share` — the server stores `{ type, title, content, hasAudio, createdAt }`
+  in Firestore `shares/{id}` and uploads audio (if any) to Storage at `shares/{id}.mp3`.
+  Shared audio always includes the lyric & chord sheet as its content.
+- `GET /api/share/:id` — returns the shared content as JSON.
+- `GET /api/share/:id/audio` — streams the MP3 (the bucket is never public).
+- `GET /share/:id` — the React app renders the public share page.
 
-> Note: the Firebase web config is not a secret — access is enforced by the security
-> rules above — so it is safe to bake into the client bundle.
-
-### Production (Docker / Cloud Run)
-
-Vite embeds these values in the client bundle **at build time**, so they must be passed
-as Docker build args:
-
-```bash
-gcloud builds submit \
-  --tag YOUR_REGION-docker.pkg.dev/YOUR_PROJECT_ID/musician-buddy-repo/musician-buddy \
-  --build-arg VITE_FIREBASE_API_KEY=... \
-  --build-arg VITE_FIREBASE_AUTH_DOMAIN=... \
-  --build-arg VITE_FIREBASE_PROJECT_ID=... \
-  --build-arg VITE_FIREBASE_STORAGE_BUCKET=... \
-  --build-arg VITE_FIREBASE_MESSAGING_SENDER_ID=... \
-  --build-arg VITE_FIREBASE_APP_ID=...
-```
-
-If you use a Cloud Build trigger for continuous deployment, add the same values as
-substitution variables in the trigger and forward them to Docker as `--build-arg`s in
-your `cloudbuild.yaml` build step.
-
-## What users get
-
-- **Sign in** with Google, Apple, or Email + Password (create account supported in-app).
-- **Save to Profile** buttons on generated lesson plans, songs, and audio clips.
-- **Download** buttons for lesson plans / songs (Markdown) and audio (MP3).
-- **My Library** (header icon or account menu) to browse, play, re-download, and delete saved items.
-- The musician profile (instrument, skill level, goals) syncs to their account and follows them across devices.
+Share IDs are unguessable Firestore auto-IDs. The server authenticates to Firebase
+with Application Default Credentials: the service account on Cloud Run, or
+`gcloud auth application-default login` locally.
 
 ## Data model
 
@@ -117,5 +74,13 @@ your `cloudbuild.yaml` build step.
 users/{uid}                     -> { profile, email, displayName, updatedAt }
 users/{uid}/library/{itemId}    -> { type: 'lesson-plan' | 'song' | 'audio',
                                      title, content, audioUrl?, audioPath?, createdAt }
-Storage: users/{uid}/audio/{itemId}.mp3
+shares/{shareId}                -> { type, title, content, hasAudio, createdAt }
+Storage: users/{uid}/audio/{itemId}.mp3   (private, per-user)
+Storage: shares/{shareId}.mp3             (served only via the backend)
 ```
+
+## Local development
+
+`.env` in the repo root (gitignored) holds `GEMINI_API_KEY` and the `VITE_FIREBASE_*`
+values; the server loads it automatically via `process.loadEnvFile()`. For the share
+endpoints to work locally you also need ADC: `gcloud auth application-default login`.

@@ -25,7 +25,9 @@ const libraryCollection = (uid: string) => {
  */
 export const saveMessageToLibrary = async (uid: string, message: Message): Promise<SavedItem> => {
   const type: SavedItemType = classifyMessage(message) ?? 'song';
-  const title = extractTitle(message.content, type);
+  // For generated audio, the lyric & chord sheet is the canonical text content.
+  const textContent = type === 'audio' ? (message.lyricsSheet || message.content) : message.content;
+  const title = extractTitle(textContent, type);
   const itemRef = doc(libraryCollection(uid));
 
   let audioUrl: string | undefined;
@@ -43,7 +45,7 @@ export const saveMessageToLibrary = async (uid: string, message: Message): Promi
     id: itemRef.id,
     type,
     title,
-    content: message.content,
+    content: textContent,
     createdAt: Date.now(),
     ...(audioUrl ? { audioUrl, audioPath } : {}),
   };

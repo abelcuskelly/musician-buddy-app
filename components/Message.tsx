@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Message as MessageType } from '../types.js';
 import { useAuth } from '../context/AuthContext.tsx';
 import { classifyMessage, extractTitle, downloadMarkdown } from '../lib/content.ts';
 import { saveMessageToLibrary } from '../services/library.ts';
+import { SharePayload } from '../lib/share.ts';
+import MarkdownContent from './MarkdownContent.tsx';
+import ShareButton from './ShareButton.tsx';
 import BotIcon from './icons/BotIcon.js';
 import UserIcon from './icons/UserIcon.js';
 import DownloadIcon from './icons/DownloadIcon.tsx';
@@ -28,10 +29,12 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const savedType = isModel && !message.isStreaming ? classifyMessage(message) : null;
+  // For generated audio, the lyric & chord sheet is the canonical text content.
+  const sheetContent = savedType === 'audio' ? (message.lyricsSheet || message.content) : message.content;
+  const title = savedType ? extractTitle(sheetContent, savedType) : '';
 
-  const handleDownload = () => {
-    const type = savedType ?? 'song';
-    downloadMarkdown(extractTitle(message.content, type), message.content);
+  const handleDownloadSheet = () => {
+    downloadMarkdown(title, sheetContent);
   };
 
   const handleSave = async () => {
@@ -50,20 +53,13 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
     }
   };
 
-  const markdownStyles = {
-    h1: 'text-2xl font-bold my-4 text-[#fab387]',
-    h2: 'text-xl font-bold my-3 text-[#fab387]',
-    h3: 'text-lg font-bold my-2 text-[#fab387]',
-    p: 'mb-4 leading-relaxed',
-    ol: 'list-decimal list-inside my-4 pl-4 space-y-2',
-    ul: 'list-disc list-inside my-4 pl-4 space-y-2',
-    li: 'mb-2',
-    code: 'bg-[#313244] text-[#f5c2e7] px-2 py-1 rounded-md font-mono text-sm',
-    pre: 'bg-[#313244] p-4 rounded-lg overflow-x-auto my-4',
-    strong: 'font-bold text-[#f9e2af]',
-    em: 'italic text-[#cba6f7]',
-    a: 'text-[#89b4fa] hover:underline',
-  };
+  const getSharePayload = (): SharePayload => ({
+    type: savedType ?? 'song',
+    title,
+    // Sharing generated audio always includes the lyric & chord sheet.
+    content: sheetContent,
+    ...(message.audioData ? { audioData: message.audioData } : {}),
+  });
 
   return (
     <div className={`flex items-start gap-4 ${isModel ? '' : 'flex-row-reverse'}`}>
@@ -80,25 +76,7 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
           </div>
         ) : (
           <>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                h1: ({node, ...props}) => <h1 className={markdownStyles.h1} {...props} />,
-                h2: ({node, ...props}) => <h2 className={markdownStyles.h2} {...props} />,
-                h3: ({node, ...props}) => <h3 className={markdownStyles.h3} {...props} />,
-                p: ({node, ...props}) => <p className={markdownStyles.p} {...props} />,
-                ol: ({node, ...props}) => <ol className={markdownStyles.ol} {...props} />,
-                ul: ({node, ...props}) => <ul className={markdownStyles.ul} {...props} />,
-                li: ({node, ...props}) => <li className={markdownStyles.li} {...props} />,
-                code: ({node, inline, ...props}: any) => inline ? <code className={markdownStyles.code} {...props} /> : <div className={markdownStyles.pre}><code {...props} /></div>,
-                pre: ({node, ...props}) => <pre className={markdownStyles.pre} {...props} />,
-                strong: ({node, ...props}) => <strong className={markdownStyles.strong} {...props} />,
-                em: ({node, ...props}) => <em className={markdownStyles.em} {...props} />,
-                a: ({node, ...props}) => <a className={markdownStyles.a} target="_blank" rel="noopener noreferrer" {...props} />,
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+            <MarkdownContent content={message.content} />
 
             {message.audioData && (
               <div className="mt-4 p-4 bg-[#181825] rounded-xl border border-gray-700 shadow-inner">
@@ -112,7 +90,7 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                     download="musician-buddy-composition.mp3"
                     className="text-xs text-[#89b4fa] hover:text-[#b4befe] transition-colors flex items-center gap-1 font-medium"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <DownloadIcon className="w-3.5 h-3.5" />
                     Download MP3
                   </a>
                 </div>
@@ -123,18 +101,35 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
               </div>
             )}
 
-            {savedType && (
-              <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2 flex-wrap">
-                {savedType !== 'audio' && (
+            {message.audioData && message.lyricsSheet && (
+              <div className="mt-4 p-4 bg-[#181825] rounded-xl border border-gray-700 shadow-inner">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-[#f9e2af] uppercase tracking-widest">
+                    Lyrics &amp; Chord Sheet
+                  </span>
                   <button
-                    onClick={handleDownload}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
-                    aria-label="Download as Markdown"
+                    onClick={handleDownloadSheet}
+                    className="text-xs text-[#89b4fa] hover:text-[#b4befe] transition-colors flex items-center gap-1 font-medium"
+                    aria-label="Download lyric and chord sheet"
                   >
                     <DownloadIcon className="w-3.5 h-3.5" />
-                    Download
+                    Download Sheet
                   </button>
-                )}
+                </div>
+                <MarkdownContent content={message.lyricsSheet} />
+              </div>
+            )}
+
+            {savedType && (
+              <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={handleDownloadSheet}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
+                  aria-label="Download as Markdown"
+                >
+                  <DownloadIcon className="w-3.5 h-3.5" />
+                  {savedType === 'audio' ? 'Download Sheet' : 'Download'}
+                </button>
                 <button
                   onClick={handleSave}
                   disabled={saveState === 'saving' || saveState === 'saved'}
@@ -157,6 +152,7 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                     </>
                   )}
                 </button>
+                <ShareButton getPayload={getSharePayload} />
                 {saveState === 'error' && (
                   <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
                 )}

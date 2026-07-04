@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Audio saved to a user's library is private to that user.
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Shared audio ("shares/" prefix) is only accessed through the backend
+    // with the Admin SDK, so no client access is granted here.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

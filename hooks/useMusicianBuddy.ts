@@ -39,7 +39,7 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
         const data = await response.json();
         setMessages(prev => prev.map(msg => 
           msg.id === modelMessageId 
-            ? { ...msg, content: data.content, audioData: data.audioData, isStreaming: false } 
+            ? { ...msg, content: data.content, audioData: data.audioData, lyricsSheet: data.lyricsSheet, isStreaming: false } 
             : msg
         ));
       } else {

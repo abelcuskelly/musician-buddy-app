@@ -3,6 +3,8 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { SavedItem, SavedItemType } from '../types.ts';
 import { listLibraryItems, deleteLibraryItem } from '../services/library.ts';
 import { downloadMarkdown, downloadAudioFromUrl } from '../lib/content.ts';
+import { SharePayload, blobToBase64 } from '../lib/share.ts';
+import ShareButton from './ShareButton.tsx';
 import CloseIcon from './icons/CloseIcon.tsx';
 import DownloadIcon from './icons/DownloadIcon.tsx';
 import TrashIcon from './icons/TrashIcon.tsx';
@@ -76,6 +78,18 @@ const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
     } else {
       downloadMarkdown(item.title, item.content);
     }
+  };
+
+  // Sharing an audio item re-reads the (private) audio file as base64 so the
+  // server can publish a copy; shared audio always includes the lyric sheet.
+  const getSharePayload = async (item: SavedItem): Promise<SharePayload> => {
+    let audioData: string | undefined;
+    if (item.type === 'audio' && item.audioUrl) {
+      const response = await fetch(item.audioUrl);
+      if (!response.ok) throw new Error('Could not read the saved audio file.');
+      audioData = await blobToBase64(await response.blob());
+    }
+    return { type: item.type, title: item.title, content: item.content, ...(audioData ? { audioData } : {}) };
   };
 
   const visibleItems = filter === 'all' ? items : items.filter(item => item.type === filter);
@@ -156,6 +170,7 @@ const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
                       <p className="text-[#cdd6f4] font-medium mt-1 truncate">{item.title}</p>
                     </button>
                     <div className="flex items-center gap-1 flex-shrink-0">
+                      <ShareButton compact getPayload={() => getSharePayload(item)} iconClassName="w-4 h-4" />
                       <button
                         onClick={() => handleDownload(item)}
                         className="p-2 rounded-full hover:bg-white/10 text-[#89b4fa] transition-colors"
