@@ -61,7 +61,7 @@ export const useMusicianBuddy = (messages: Message[], setMessages: React.Dispatc
       console.error("Chat Error:", e);
       const errorMsg = e.message || "Sorry, I encountered an error communicating with the server.";
       setError(errorMsg);
-      setMessages(prev => msg.id === modelMessageId ? { ...msg, content: errorMsg, isStreaming: false } : msg);
+      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: errorMsg, isStreaming: false } : msg));
     } finally {
       setIsLoading(false);
     }

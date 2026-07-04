@@ -1,16 +1,54 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Message as MessageType } from '../types.js';
+import { useAuth } from '../context/AuthContext.tsx';
+import { classifyMessage, extractTitle, downloadMarkdown } from '../lib/content.ts';
+import { saveMessageToLibrary } from '../services/library.ts';
 import BotIcon from './icons/BotIcon.js';
 import UserIcon from './icons/UserIcon.js';
+import DownloadIcon from './icons/DownloadIcon.tsx';
+import BookmarkIcon from './icons/BookmarkIcon.tsx';
+import CheckIcon from './icons/CheckIcon.tsx';
 
 interface MessageProps {
   message: MessageType;
+  onRequireSignIn: () => void;
 }
 
-const Message: React.FC<MessageProps> = ({ message }) => {
+const SAVE_LABELS: Record<string, string> = {
+  'lesson-plan': 'Save Lesson Plan',
+  song: 'Save Song',
+  audio: 'Save Audio',
+};
+
+const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
   const isModel = message.role === 'model';
+  const { user } = useAuth();
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  const savedType = isModel && !message.isStreaming ? classifyMessage(message) : null;
+
+  const handleDownload = () => {
+    const type = savedType ?? 'song';
+    downloadMarkdown(extractTitle(message.content, type), message.content);
+  };
+
+  const handleSave = async () => {
+    if (!user) {
+      onRequireSignIn();
+      return;
+    }
+    if (saveState === 'saving' || saveState === 'saved') return;
+    setSaveState('saving');
+    try {
+      await saveMessageToLibrary(user.uid, message);
+      setSaveState('saved');
+    } catch (e) {
+      console.error('Failed to save to profile:', e);
+      setSaveState('error');
+    }
+  };
 
   const markdownStyles = {
     h1: 'text-2xl font-bold my-4 text-[#fab387]',
@@ -52,7 +90,7 @@ const Message: React.FC<MessageProps> = ({ message }) => {
                 ol: ({node, ...props}) => <ol className={markdownStyles.ol} {...props} />,
                 ul: ({node, ...props}) => <ul className={markdownStyles.ul} {...props} />,
                 li: ({node, ...props}) => <li className={markdownStyles.li} {...props} />,
-                code: ({node, inline, ...props}) => inline ? <code className={markdownStyles.code} {...props} /> : <div className={markdownStyles.pre}><code {...props} /></div>,
+                code: ({node, inline, ...props}: any) => inline ? <code className={markdownStyles.code} {...props} /> : <div className={markdownStyles.pre}><code {...props} /></div>,
                 pre: ({node, ...props}) => <pre className={markdownStyles.pre} {...props} />,
                 strong: ({node, ...props}) => <strong className={markdownStyles.strong} {...props} />,
                 em: ({node, ...props}) => <em className={markdownStyles.em} {...props} />,
@@ -82,6 +120,46 @@ const Message: React.FC<MessageProps> = ({ message }) => {
                   <source src={`data:audio/mp3;base64,${message.audioData}`} type="audio/mp3" />
                   Your browser does not support the audio element.
                 </audio>
+              </div>
+            )}
+
+            {savedType && (
+              <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2 flex-wrap">
+                {savedType !== 'audio' && (
+                  <button
+                    onClick={handleDownload}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
+                    aria-label="Download as Markdown"
+                  >
+                    <DownloadIcon className="w-3.5 h-3.5" />
+                    Download
+                  </button>
+                )}
+                <button
+                  onClick={handleSave}
+                  disabled={saveState === 'saving' || saveState === 'saved'}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    saveState === 'saved'
+                      ? 'bg-[#a6e3a1]/15 text-[#a6e3a1] cursor-default'
+                      : 'bg-[#313244] hover:bg-[#45475a] text-[#cba6f7]'
+                  } disabled:opacity-80`}
+                  aria-label="Save to profile"
+                >
+                  {saveState === 'saved' ? (
+                    <>
+                      <CheckIcon className="w-3.5 h-3.5" />
+                      Saved to Profile
+                    </>
+                  ) : (
+                    <>
+                      <BookmarkIcon className="w-3.5 h-3.5" filled={false} />
+                      {saveState === 'saving' ? 'Saving...' : SAVE_LABELS[savedType]}
+                    </>
+                  )}
+                </button>
+                {saveState === 'error' && (
+                  <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
+                )}
               </div>
             )}
           </>

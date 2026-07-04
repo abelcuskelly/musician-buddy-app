@@ -6,6 +6,7 @@
     "moduleResolution": "NodeNext",
     "outDir": "dist-server",
     "noEmit": false,
+    "allowImportingTsExtensions": false,
     "sourceMap": true,
     "isolatedModules": false
   },

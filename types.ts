@@ -18,3 +18,15 @@ export interface Message {
   audioData?: string; // Base64 encoded audio
   isStreaming?: boolean;
 }
+
+export type SavedItemType = 'lesson-plan' | 'song' | 'audio';
+
+export interface SavedItem {
+  id: string;
+  type: SavedItemType;
+  title: string;
+  content: string;
+  audioUrl?: string; // Download URL for audio stored in Firebase Storage
+  audioPath?: string; // Storage path, used for deletion
+  createdAt: number; // epoch millis
+}
