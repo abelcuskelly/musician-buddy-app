@@ -1,21 +1,45 @@
 import { Message, SavedItemType } from '../types.ts';
 
-const LESSON_PLAN_PATTERN = /lesson plan|practice plan|practice routine|practice schedule|weekly plan|week(ly)? (lesson|practice)|day \d+\s*[:-]/i;
-const SONG_PATTERN = /\[?(verse|chorus|bridge|intro|outro|pre-chorus|hook)\b\s*\d*\]?[:\]]|lyrics|chord progression|strumming pattern|melody|\bbpm\b|key of [A-G]/i;
+// Structural signals that a message contains an actual artifact (a written
+// song sheet or a scheduled lesson plan), not just a conversational mention
+// of one. Keyword matching alone shows save/download/share buttons on plain
+// chat replies, so classification requires document structure:
 
-// Short conversational replies that merely mention "lesson plan" or "chorus"
-// shouldn't get save buttons; real generated content is much longer.
-const MIN_SAVEABLE_LENGTH = 250;
+// Song section tags on their own, e.g. "[Verse 1]", "[Chorus]", "[Bridge]"
+const SONG_SECTION_TAG = /\[(verse|chorus|bridge|intro|outro|pre-chorus|hook|refrain|solo|drop)[^\]\n]{0,12}\]/gi;
+// Bracketed chord notation, e.g. "[G]", "[Em7]", "[D/F#]", "[Bbmaj7]"
+const CHORD_TOKEN = /\[[A-G][#b♯♭]?(?:maj|min|m|M|dim|aug|sus|add)?\d{0,2}(?:\/[A-G][#b♯♭]?)?\]/g;
+// Schedule headings at the start of a line, e.g. "### 🎸 Day 1:", "**Week 2 -", "Monday:"
+const SCHEDULE_HEADING = /^.{0,15}\b(?:day\s*\d+|week\s*\d+|session\s*\d+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b\s*[:\-–—]/gim;
+// A title heading that names the document a plan, e.g. "## Your Weekly Lesson Plan"
+const PLAN_TITLE_HEADING = /^#{1,4}\s+[^\n]*(lesson plan|practice plan|practice routine|practice schedule)/im;
+
+// Lesson-plan artifacts are substantial; short replies are conversation.
+// (Song notation is unambiguous, so no length minimum is applied there.)
+const MIN_LESSON_PLAN_LENGTH = 250;
 
 /**
  * Classifies a model message so the right save/download actions can be shown.
- * Returns null for conversational messages that aren't worth saving.
+ * Returns null for conversational messages that aren't worth saving — buttons
+ * appear only when the message contains actual notated/structured content.
  */
 export const classifyMessage = (message: Message): SavedItemType | null => {
   if (message.audioData) return 'audio';
-  if (message.content.length < MIN_SAVEABLE_LENGTH) return null;
-  if (LESSON_PLAN_PATTERN.test(message.content)) return 'lesson-plan';
-  if (SONG_PATTERN.test(message.content)) return 'song';
+  const content = message.content;
+
+  const sectionTags = content.match(SONG_SECTION_TAG)?.length ?? 0;
+  const chordTokens = content.match(CHORD_TOKEN)?.length ?? 0;
+  if (sectionTags >= 2 || chordTokens >= 4 || (sectionTags >= 1 && chordTokens >= 2)) {
+    return 'song';
+  }
+
+  if (content.length >= MIN_LESSON_PLAN_LENGTH) {
+    const scheduleHeadings = content.match(SCHEDULE_HEADING)?.length ?? 0;
+    if (scheduleHeadings >= 2 || PLAN_TITLE_HEADING.test(content)) {
+      return 'lesson-plan';
+    }
+  }
+
   return null;
 };
 
