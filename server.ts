@@ -69,6 +69,10 @@ interface LyriaOutput {
   lyrics: string;
 }
 
+// Matches the various shapes Google's safety filters use when rejecting a
+// music prompt (error codes, enum strings, and prose variants).
+const POLICY_BLOCK_PATTERN = /content_blocked|PROHIBITED_CONTENT|blocked for .*policy|safety|blocklist|prohibited/i;
+
 /** Calls a Lyria 3 model through the Interactions API and parses the steps. */
 const generateLyriaMusic = async (model: string, input: string): Promise<LyriaOutput> => {
   const token = await getLyriaAccessToken();
@@ -81,9 +85,9 @@ const generateLyriaMusic = async (model: string, input: string): Promise<LyriaOu
   const interaction: any = await response.json();
   if (!response.ok) {
     const message = interaction?.error?.message || `Lyria request failed (HTTP ${response.status}).`;
-    const blocked = interaction?.error?.code === 'content_blocked';
+    const code = String(interaction?.error?.code ?? '');
     const error: any = new Error(message);
-    error.contentBlocked = blocked;
+    error.contentBlocked = POLICY_BLOCK_PATTERN.test(code) || POLICY_BLOCK_PATTERN.test(message);
     throw error;
   }
 
@@ -101,8 +105,77 @@ const generateLyriaMusic = async (model: string, input: string): Promise<LyriaOu
       }
     }
   }
+
+  // A 200 with no audio means generation was silently filtered — surface it
+  // as a block instead of returning an empty "success" to the UI.
+  if (!audioBase64) {
+    const error: any = new Error(`Lyria returned no audio (status: ${interaction?.status ?? 'unknown'}).`);
+    error.contentBlocked = true;
+    throw error;
+  }
+
   return { audioBase64, lyrics: lyricsParts.join('\n').trim() };
 };
+
+interface PromptScreenResult {
+  verdict: 'ok' | 'rewritten' | 'blocked';
+  input: string; // the (possibly rewritten) prompt that is safe to send
+  reason?: string; // user-facing explanation for a rewrite or block
+}
+
+/**
+ * Light pre-filter run before every Lyria call. Google's music models reject
+ * prompts naming real artists/public figures, requesting copyrighted lyrics,
+ * or touching prohibited themes (hate, sexual content, violence, self-harm,
+ * illegal activity, PII). A fast Gemini pass rewrites artist references into
+ * neutral style descriptors and blocks clearly prohibited requests, so most
+ * generations succeed instead of dying at Google's filter. Fails open: if
+ * screening errors out, the original prompt is sent unchanged.
+ */
+const screenLyriaPrompt = async (input: string): Promise<PromptScreenResult> => {
+  try {
+    const result = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      config: { responseMimeType: 'application/json' },
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: `You are a music-generation prompt screener. The prompt below will be sent to a music AI (Lyria) whose safety policy REJECTS: (1) real artist/band/public-figure names or "in the style of <artist>" requests, (2) reproduction of copyrighted lyrics, (3) hate/harassment, sexually explicit content, violence or dangerous activities, self-harm, illegal activity, or personal identifying information.
+
+Analyze the prompt and respond with ONLY a JSON object:
+- If it has none of these issues: {"verdict":"ok"}
+- If it names artists/bands/public figures or copyrighted songs: rewrite it, replacing each name with concrete musical descriptors of that sound (genre, era, vocal character, instrumentation, production style) and removing any copyrighted lyric lines. Keep everything else (BPM, key, structure, original lyrics) EXACTLY intact. Respond: {"verdict":"rewritten","input":"<full rewritten prompt>","reason":"<one short sentence, e.g. replaced the artist name with a style description>"}
+- Only if it clearly requests prohibited themes that cannot be fixed by rewriting: {"verdict":"blocked","reason":"<one short user-facing sentence naming the problematic theme>"}
+
+PROMPT:
+${input}`
+        }]
+      }]
+    });
+
+    const raw = result.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+    const parsed = JSON.parse(raw);
+    if (parsed.verdict === 'rewritten' && typeof parsed.input === 'string' && parsed.input.trim()) {
+      return { verdict: 'rewritten', input: parsed.input, reason: parsed.reason };
+    }
+    if (parsed.verdict === 'blocked') {
+      return { verdict: 'blocked', input, reason: parsed.reason };
+    }
+    return { verdict: 'ok', input };
+  } catch (error) {
+    console.warn('Prompt screening failed; sending original prompt:', error);
+    return { verdict: 'ok', input };
+  }
+};
+
+const POLICY_BLOCK_USER_MESSAGE = `**I couldn't generate that track — the request was blocked by Google's music content policy (PROHIBITED_CONTENT).**
+
+This usually happens when a prompt includes:
+- A **real artist, band, or public figure's name** (e.g. "sounds like <artist>") — the music model can't imitate specific artists
+- **Copyrighted lyrics** from an existing song
+- Sensitive themes (violence, explicit content, hate speech, self-harm, illegal activity, or personal information)
+
+**The fix:** describe the *sound* instead of naming names — for example "upbeat 2010s pop with bright female vocals, acoustic guitar, and punchy drums at 120 BPM." Update the concept or lyrics and say **"generate the audio now"** to try again!`;
 
 // Voice models (overridable via env without a code change).
 // Model IDs verified against the Vertex AI global endpoint for this project.
@@ -179,15 +252,28 @@ app.post('/api/chat', async (req, res) => {
 Musical direction from our production session (genre, instruments, BPM, key, structure, and lyrics to follow):
 ${planningContext || `A piece suited to a ${profile?.skillLevel ?? 'beginner'} ${profile?.instrument ?? 'guitar'} player who loves ${profile?.musicGenres ?? 'popular'} music.`}`;
 
+      // Pre-screen the prompt: rewrite artist-name references into style
+      // descriptors and stop clearly prohibited requests before they reach
+      // (and get hard-blocked by) Google's Lyria safety filters.
+      const screened = await screenLyriaPrompt(lyriaInput);
+      if (screened.verdict === 'blocked') {
+        return res.json({
+          content: `**I can't send that one to the music generator** — ${screened.reason || 'it includes a theme that Google\'s music content policy prohibits'} (Google blocks music prompts involving sensitive subjects, explicit content, or real people's identities).\n\nLet's rework the concept or lyrics together, then say **"generate the audio now"** to try again!`,
+        });
+      }
+      if (screened.verdict === 'rewritten') {
+        console.log(`[Screen] Lyria prompt rewritten: ${screened.reason}`);
+      }
+
       let lyriaResult: LyriaOutput;
       try {
-        lyriaResult = await generateLyriaMusic(modelId, lyriaInput);
+        lyriaResult = await generateLyriaMusic(modelId, screened.input);
       } catch (lyriaError: any) {
         console.error('Lyria generation failed:', lyriaError);
         return res.json({
           content: lyriaError.contentBlocked
-            ? "The music generator's safety filters blocked that request — this can happen when a prompt references a specific artist's voice or copyrighted lyrics. Let's tweak the concept or lyrics and try again!"
-            : "I hit a snag producing the track just now. Let's try generating it again in a moment!",
+            ? POLICY_BLOCK_USER_MESSAGE
+            : "**I hit a technical snag producing the track** (the music service didn't respond as expected — this isn't a problem with your song). Say **\"generate the audio now\"** to try again in a moment!",
         });
       }
 
@@ -210,8 +296,12 @@ ${planningContext || `A piece suited to a ${profile?.skillLevel ?? 'beginner'} $
         lyricsSheet = lyriaResult.lyrics; // fall back to Lyria's raw lyrics
       }
 
+      const rewriteNote = screened.verdict === 'rewritten'
+        ? `\n\n*Heads up: Google's music policy doesn't allow real artist names in prompts, so I ${screened.reason?.replace(/\.$/, '') || 'rephrased that reference as a style description'} before generating.*`
+        : '';
+
       return res.json({
-        content: "Your track has been produced! Listen or download below.",
+        content: `Your track has been produced! Listen or download below.${rewriteNote}`,
         audioData: lyriaResult.audioBase64,
         lyricsSheet
       });
