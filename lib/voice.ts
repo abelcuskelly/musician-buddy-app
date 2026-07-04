@@ -6,9 +6,10 @@ export interface RecordingResult {
   mimeType: string;
 }
 
-const SILENCE_THRESHOLD = 0.012; // RMS below this counts as silence
+const MIN_SPEECH_RMS = 0.006; // floor: RMS above this can count as speech
+const NOISE_FLOOR_MULTIPLIER = 3; // ...and must also rise above ambient noise
 const SILENCE_STOP_MS = 2000; // stop this long after speech goes quiet
-const NO_SPEECH_STOP_MS = 7000; // give up if nothing was ever said
+const NO_SPEECH_STOP_MS = 10000; // give up if nothing was ever said
 const MAX_RECORDING_MS = 60000;
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -39,8 +40,13 @@ export class SpeechRecorder {
     this.finished = new Promise(resolve => { this.resolveFinished = resolve; });
   }
 
+  /** True once the recorder heard something above the noise floor. */
+  speechDetected = false;
+
   async start(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
 
     const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
     const mimeType = preferredTypes.find(t => MediaRecorder.isTypeSupported(t));
@@ -86,6 +92,11 @@ export class SpeechRecorder {
     if (!this.stream) return;
     try {
       this.audioContext = new AudioContext();
+      // Auto-listen (hands-free loop) runs outside a click; make sure the
+      // monitoring context is actually running or RMS reads as pure zeros.
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
       const source = this.audioContext.createMediaStreamSource(this.stream);
       const analyser = this.audioContext.createAnalyser();
       analyser.fftSize = 2048;
@@ -93,8 +104,10 @@ export class SpeechRecorder {
 
       const samples = new Float32Array(analyser.fftSize);
       const startedAt = Date.now();
-      let speechDetected = false;
       let quietSince: number | null = null;
+      // Adaptive noise floor so quiet mics and noisy rooms both work: speech
+      // must rise clearly above the ambient level, not a fixed threshold.
+      let noiseFloor = 0.003;
 
       this.monitorInterval = setInterval(() => {
         analyser.getFloatTimeDomainData(samples);
@@ -103,17 +116,19 @@ export class SpeechRecorder {
         const rms = Math.sqrt(sum / samples.length);
         const now = Date.now();
 
-        if (rms >= SILENCE_THRESHOLD) {
-          speechDetected = true;
+        const speechThreshold = Math.max(MIN_SPEECH_RMS, noiseFloor * NOISE_FLOOR_MULTIPLIER);
+        if (rms >= speechThreshold) {
+          this.speechDetected = true;
           quietSince = null;
-        } else if (quietSince === null) {
-          quietSince = now;
+        } else {
+          noiseFloor = noiseFloor * 0.95 + rms * 0.05;
+          if (quietSince === null) quietSince = now;
         }
 
         const quietFor = quietSince === null ? 0 : now - quietSince;
         const shouldStop =
-          (speechDetected && quietFor >= SILENCE_STOP_MS) ||
-          (!speechDetected && now - startedAt >= NO_SPEECH_STOP_MS) ||
+          (this.speechDetected && quietFor >= SILENCE_STOP_MS) ||
+          (!this.speechDetected && now - startedAt >= NO_SPEECH_STOP_MS) ||
           now - startedAt >= MAX_RECORDING_MS;
 
         if (shouldStop) this.stop();

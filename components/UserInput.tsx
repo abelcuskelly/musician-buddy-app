@@ -37,6 +37,11 @@ const UserInput: React.FC<UserInputProps> = ({ onSendMessage, isLoading, handsFr
 
       if (!result) {
         setVoiceState('idle');
+        setVoiceError(
+          recorder.speechDetected
+            ? 'The recording came through empty — please try again.'
+            : "I didn't hear anything — check that the right microphone is selected and try speaking a bit louder."
+        );
         return;
       }
 
@@ -44,7 +49,10 @@ const UserInput: React.FC<UserInputProps> = ({ onSendMessage, isLoading, handsFr
       const transcript = await transcribeAudio(result);
       setVoiceState('idle');
 
-      if (!transcript) return;
+      if (!transcript) {
+        setVoiceError("I couldn't make out any words in that — try again, a little closer to the mic.");
+        return;
+      }
       if (handsFree) {
         onSendMessage(transcript);
       } else {
