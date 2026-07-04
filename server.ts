@@ -2,7 +2,8 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Chat, Content } from '@google/genai';
+import { WebSocketServer, WebSocket } from 'ws';
+import { GoogleGenAI, Chat, Content, LiveMusicSession } from '@google/genai';
 import { GoogleAuth, Impersonated } from 'google-auth-library';
 import { initializeApp as initializeAdminApp, getApps as getAdminApps, App as AdminApp } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
@@ -467,6 +468,43 @@ const SHARE_TYPES: SavedItemType[] = ['lesson-plan', 'song', 'audio'];
 const MAX_SHARE_CONTENT_CHARS = 200_000;
 const MAX_SHARE_AUDIO_BASE64_CHARS = 20_000_000; // ~15 MB of audio
 
+interface CreateShareParams {
+  type: SavedItemType;
+  title: string;
+  content: string;
+  audioBuffer?: Buffer;
+  audioMimeType?: string;
+}
+
+/** Stores a public share (Firestore doc + optional audio file) and returns its path. */
+const createShareRecord = async ({ type, title, content, audioBuffer, audioMimeType }: CreateShareParams): Promise<{ id: string; path: string }> => {
+  if (!adminApp) {
+    throw new Error('Sharing is not configured on this server.');
+  }
+  const db = getAdminFirestore(adminApp);
+  const docRef = db.collection('shares').doc();
+
+  let hasAudio = false;
+  if (audioBuffer) {
+    const bucket = getAdminStorage(adminApp).bucket();
+    await bucket.file(`shares/${docRef.id}.mp3`).save(audioBuffer, {
+      contentType: audioMimeType || 'audio/mp3',
+    });
+    hasAudio = true;
+  }
+
+  await docRef.set({
+    type,
+    title: title.slice(0, 200),
+    content,
+    hasAudio,
+    ...(hasAudio ? { audioMimeType: audioMimeType || 'audio/mp3' } : {}),
+    createdAt: Date.now(),
+  });
+
+  return { id: docRef.id, path: `/share/${docRef.id}` };
+};
+
 app.post('/api/share', async (req, res) => {
   try {
     if (!adminApp) {
@@ -484,27 +522,13 @@ app.post('/api/share', async (req, res) => {
       return res.status(413).json({ error: { message: 'Shared content is too large.' } });
     }
 
-    const db = getAdminFirestore(adminApp);
-    const docRef = db.collection('shares').doc();
-
-    let hasAudio = false;
-    if (audioData) {
-      const bucket = getAdminStorage(adminApp).bucket();
-      await bucket.file(`shares/${docRef.id}.mp3`).save(Buffer.from(audioData, 'base64'), {
-        contentType: 'audio/mp3',
-      });
-      hasAudio = true;
-    }
-
-    await docRef.set({
+    const share = await createShareRecord({
       type,
-      title: title.slice(0, 200),
+      title,
       content,
-      hasAudio,
-      createdAt: Date.now(),
+      audioBuffer: audioData ? Buffer.from(audioData, 'base64') : undefined,
     });
-
-    res.json({ id: docRef.id, path: `/share/${docRef.id}` });
+    res.json(share);
   } catch (error: any) {
     console.error('Error in POST /api/share:', error);
     res.status(500).json({ error: { message: error.message || 'Failed to create share link.' } });
@@ -538,7 +562,8 @@ app.get('/api/share/:id/audio', async (req, res) => {
     if (!exists) {
       return res.status(404).json({ error: { message: 'Audio not found for this share.' } });
     }
-    res.setHeader('Content-Type', 'audio/mp3');
+    const [metadata] = await file.getMetadata().catch(() => [{ contentType: 'audio/mp3' }] as any);
+    res.setHeader('Content-Type', metadata?.contentType || 'audio/mp3');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     file.createReadStream()
       .on('error', (streamError) => {
@@ -557,6 +582,219 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
-app.listen(PORT, () => {
+// --- Jam Mode: Lyria RealTime WebSocket proxy ---
+// The browser connects to /api/jam; the server holds the Google-side session
+// (models/lyria-realtime-exp, v1alpha). The experimental live-music surface
+// only accepts API keys (verified: OAuth tokens are rejected), so the key is
+// injected from Secret Manager and never leaves the server.
+const JAM_API_KEY = process.env.GEMINI_API_KEY;
+const JAM_MODEL = process.env.LYRIA_REALTIME_MODEL || 'models/lyria-realtime-exp';
+const JAM_MAX_SESSION_MS = 30 * 60 * 1000; // cost guard: auto-end after 30 min
+const JAM_MAX_CONCURRENT = 8;
+const JAM_SAMPLE_RATE = 48000;
+const JAM_BYTES_PER_SECOND = JAM_SAMPLE_RATE * 2 /* channels */ * 2 /* bytes */;
+const JAM_SHARE_BUFFER_BYTES = 60 * JAM_BYTES_PER_SECOND; // last 60 seconds
+
+let activeJamSessions = 0;
+
+/** Rolling byte buffer holding the most recent N bytes of jam audio. */
+class RollingAudioBuffer {
+  private chunks: Buffer[] = [];
+  private totalBytes = 0;
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.totalBytes += chunk.length;
+    while (this.totalBytes > JAM_SHARE_BUFFER_BYTES && this.chunks.length > 1) {
+      const removed = this.chunks.shift()!;
+      this.totalBytes -= removed.length;
+    }
+  }
+
+  toBuffer(): Buffer {
+    return Buffer.concat(this.chunks);
+  }
+
+  get seconds(): number {
+    return this.totalBytes / JAM_BYTES_PER_SECOND;
+  }
+}
+
+const sendJson = (ws: WebSocket, payload: unknown): void => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+};
+
+const handleJamConnection = async (ws: WebSocket): Promise<void> => {
+  if (!JAM_API_KEY) {
+    sendJson(ws, { type: 'error', message: 'Jam Mode is not configured on this server (missing Lyria RealTime credentials).' });
+    ws.close();
+    return;
+  }
+  if (activeJamSessions >= JAM_MAX_CONCURRENT) {
+    sendJson(ws, { type: 'error', message: 'The jam room is full right now — please try again in a few minutes.' });
+    ws.close();
+    return;
+  }
+
+  activeJamSessions++;
+  const rolling = new RollingAudioBuffer();
+  let lyria: LiveMusicSession | null = null;
+  let closed = false;
+  // Remember the latest prompts/config for the share description, and because
+  // Lyria resets unspecified config fields on every update.
+  let lastPrompts: { text: string; weight: number }[] = [];
+  let lastConfig: Record<string, unknown> = {};
+
+  const cleanup = (reason?: string) => {
+    if (closed) return;
+    closed = true;
+    activeJamSessions--;
+    clearTimeout(sessionTimer);
+    clearInterval(keepAlive);
+    try { lyria?.stop(); lyria?.close(); } catch { /* already closed */ }
+    if (ws.readyState === WebSocket.OPEN) {
+      if (reason) sendJson(ws, { type: 'ended', reason });
+      ws.close();
+    }
+  };
+
+  const sessionTimer = setTimeout(
+    () => cleanup('Jam session reached the 30-minute limit — start a new jam to keep playing!'),
+    JAM_MAX_SESSION_MS,
+  );
+  const keepAlive = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }, 30_000);
+
+  try {
+    const jamClient = new GoogleGenAI({ apiKey: JAM_API_KEY, apiVersion: 'v1alpha' });
+    lyria = await jamClient.live.music.connect({
+      model: JAM_MODEL,
+      callbacks: {
+        onmessage: (message: any) => {
+          if (message.setupComplete) {
+            sendJson(ws, { type: 'ready' });
+          }
+          if (message.filteredPrompt) {
+            sendJson(ws, {
+              type: 'filtered',
+              text: message.filteredPrompt.text ?? '',
+              reason: message.filteredPrompt.filteredReason ?? 'This prompt was blocked by the music safety filter.',
+            });
+          }
+          const chunks = message.serverContent?.audioChunks;
+          if (chunks) {
+            for (const chunk of chunks) {
+              if (!chunk.data) continue;
+              rolling.push(Buffer.from(chunk.data, 'base64'));
+              sendJson(ws, { type: 'audio', data: chunk.data });
+            }
+          }
+        },
+        onerror: (error: any) => {
+          console.error('Lyria RealTime session error:', error?.message || error);
+          sendJson(ws, { type: 'error', message: 'The music stream hit an error. Try ending and restarting the jam.' });
+        },
+        onclose: () => cleanup(),
+      },
+    });
+  } catch (error: any) {
+    console.error('Failed to connect to Lyria RealTime:', error);
+    sendJson(ws, { type: 'error', message: 'Could not start the live music stream. Please try again shortly.' });
+    cleanup();
+    return;
+  }
+
+  ws.on('message', async (raw) => {
+    let msg: any;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+
+    try {
+      switch (msg.type) {
+        case 'prompts': {
+          const prompts = (Array.isArray(msg.prompts) ? msg.prompts : [])
+            .filter((p: any) => typeof p.text === 'string' && p.text.trim() && typeof p.weight === 'number' && p.weight > 0)
+            .slice(0, 10)
+            .map((p: any) => ({ text: p.text.trim().slice(0, 120), weight: Math.min(Math.max(p.weight, 0.01), 3) }));
+          if (prompts.length === 0) break;
+          lastPrompts = prompts;
+          await lyria!.setWeightedPrompts({ weightedPrompts: prompts });
+          break;
+        }
+        case 'config': {
+          const c = msg.config ?? {};
+          const config: Record<string, unknown> = {
+            temperature: clampNumber(c.temperature, 0, 3, 1.1),
+            guidance: clampNumber(c.guidance, 0, 6, 4.0),
+            density: c.density === undefined ? undefined : clampNumber(c.density, 0, 1, 0.5),
+            brightness: c.brightness === undefined ? undefined : clampNumber(c.brightness, 0, 1, 0.5),
+            bpm: c.bpm === undefined ? undefined : Math.round(clampNumber(c.bpm, 60, 200, 120)),
+            scale: typeof c.scale === 'string' && c.scale !== 'SCALE_UNSPECIFIED' ? c.scale : undefined,
+            muteBass: !!c.muteBass,
+            muteDrums: !!c.muteDrums,
+            onlyBassAndDrums: !!c.onlyBassAndDrums,
+          };
+          Object.keys(config).forEach(k => config[k] === undefined && delete config[k]);
+          lastConfig = config;
+          await lyria!.setMusicGenerationConfig({ musicGenerationConfig: config });
+          // BPM and scale changes only take effect after a context reset (hard transition).
+          if (msg.reset) lyria!.resetContext();
+          break;
+        }
+        case 'play': lyria!.play(); break;
+        case 'pause': lyria!.pause(); break;
+        case 'stop': lyria!.stop(); break;
+        case 'share': {
+          if (rolling.seconds < 3) {
+            sendJson(ws, { type: 'share-error', message: 'Not enough audio yet — jam a little longer, then share!' });
+            break;
+          }
+          const wav = pcmToWav(rolling.toBuffer(), JAM_SAMPLE_RATE, 2);
+          const promptList = lastPrompts.map(p => `- **${p.text}** (weight ${p.weight.toFixed(1)})`).join('\n') || '- Freeform jam';
+          const configBits = [
+            lastConfig.bpm ? `BPM: ${lastConfig.bpm}` : null,
+            lastConfig.scale ? `Key: ${String(lastConfig.scale).replace(/_/g, ' ').toLowerCase()}` : null,
+          ].filter(Boolean).join(' | ');
+          const share = await createShareRecord({
+            type: 'audio',
+            title: `Live Jam — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+            content: `# Live Jam Session\n\nA real-time jam created in Jam Mode with Lyria RealTime. This clip captures the last ${Math.round(rolling.seconds)} seconds of the session.\n\n**The mix:**\n${promptList}${configBits ? `\n\n${configBits}` : ''}`,
+            audioBuffer: wav,
+            audioMimeType: 'audio/wav',
+          });
+          sendJson(ws, { type: 'shared', path: share.path });
+          break;
+        }
+      }
+    } catch (error: any) {
+      console.error(`Jam control error (${msg.type}):`, error);
+      sendJson(ws, { type: 'error', message: `Couldn't apply that change (${msg.type}). Please try again.` });
+    }
+  });
+
+  ws.on('close', () => cleanup());
+  ws.on('error', () => cleanup());
+};
+
+const clampNumber = (value: unknown, min: number, max: number, fallback: number): number => {
+  const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  return Math.min(Math.max(n, min), max);
+};
+
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+const jamWss = new WebSocketServer({ server, path: '/api/jam' });
+jamWss.on('connection', (ws) => {
+  handleJamConnection(ws).catch((error) => {
+    console.error('Jam connection handler failed:', error);
+    try { ws.close(); } catch { /* ignore */ }
+  });
 });

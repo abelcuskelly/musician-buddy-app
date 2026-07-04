@@ -13,8 +13,13 @@ import SettingsIcon from './icons/SettingsIcon.js';
 import LibraryIcon from './icons/LibraryIcon.tsx';
 import LogoutIcon from './icons/LogoutIcon.tsx';
 import HeadphonesIcon from './icons/HeadphonesIcon.tsx';
+import MusicNoteIcon from './icons/MusicNoteIcon.tsx';
 
-const Chat: React.FC = () => {
+interface ChatProps {
+  onStartJam: () => void;
+}
+
+const Chat: React.FC<ChatProps> = ({ onStartJam }) => {
   const [messages, setMessages] = useState<MessageType[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -134,6 +139,14 @@ const Chat: React.FC = () => {
           <h1 className="text-xl font-bold text-[#cdd6f4]">Jam Buddy</h1>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={onStartJam}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-br from-[#f5c2e7] to-[#cba6f7] text-gray-900 text-sm font-semibold hover:opacity-90 transition-opacity"
+            aria-label="Start Jam Mode with live streaming backing music"
+          >
+            <MusicNoteIcon className="w-4 h-4" />
+            Jam Now
+          </button>
           <button
             onClick={toggleHandsFree}
             className={`p-2 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#181825] focus:ring-[#89b4fa] transition-colors ${
