@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Chat, Content } from '@google/genai';
@@ -125,6 +126,27 @@ try {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistPath = path.join(__dirname, '..', 'dist');
+
+// Cloud Run sits behind one proxy hop; trust it so rate limiting sees the
+// real client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
+
+// General limit for static assets and pages.
+app.use(rateLimit({
+  windowMs: 60_000,
+  limit: 300,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+}));
+
+// Tighter limit for API routes, which invoke AI models and cloud storage.
+app.use('/api', rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: { message: 'Too many requests — please slow down and try again in a minute.' } },
+}));
 
 app.use(express.static(clientDistPath));
 app.use(express.json({ limit: '25mb' }));
