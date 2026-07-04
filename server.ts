@@ -18,18 +18,36 @@ try {
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-const API_KEY = process.env.GEMINI_API_KEY;
-if (!API_KEY) {
-  throw new Error("GEMINI_API_KEY environment variable not set.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY, vertexai: false });
-
-// --- Firebase Admin (used for the public share feature) ---
-// Uses Application Default Credentials: the service account on Cloud Run,
-// or `gcloud auth application-default login` locally.
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'api-connector-mcp';
 const FIREBASE_STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || 'api-connector-mcp.firebasestorage.app';
+
+// --- Gemini via Vertex AI (service-account auth) ---
+// Chat, TTS, and STT authenticate as the service account via Application
+// Default Credentials — the Cloud Run service account in production, or
+// `gcloud auth application-default login` locally. No API keys involved.
+const VERTEX_PROJECT = process.env.GOOGLE_CLOUD_PROJECT || FIREBASE_PROJECT_ID;
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'global';
+
+const ai = new GoogleGenAI({ vertexai: true, project: VERTEX_PROJECT, location: VERTEX_LOCATION });
+
+// --- Lyria (audio generation) via the Gemini Developer API ---
+// Lyria models are not served on Vertex AI, so this is the one call that still
+// needs an API key. In production the key is injected from Secret Manager
+// (musician-buddy-api-key), never stored as a plaintext env var.
+const LYRIA_API_KEY = process.env.GEMINI_API_KEY;
+const lyriaAI = LYRIA_API_KEY ? new GoogleGenAI({ apiKey: LYRIA_API_KEY, vertexai: false }) : null;
+if (!lyriaAI) {
+  console.warn('GEMINI_API_KEY not set: Lyria audio generation is disabled (chat/TTS/STT unaffected).');
+}
+
+// Voice models (overridable via env without a code change).
+// Model IDs verified against the Vertex AI global endpoint for this project.
+const TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
+const TTS_VOICE = process.env.GEMINI_TTS_VOICE || 'Kore';
+const STT_MODEL = process.env.GEMINI_STT_MODEL || 'gemini-3-flash-preview';
+const STT_FALLBACK_MODEL = 'gemini-3.1-pro-preview';
+
+// --- Firebase Admin (used for the public share feature) ---
 
 let adminApp: AdminApp | null = null;
 try {
@@ -58,12 +76,18 @@ app.post('/api/chat', async (req, res) => {
     const isExecutionRequest = triggerKeywords.some(kw => message.toLowerCase().includes(kw));
 
     if (isExecutionRequest) {
+      if (!lyriaAI) {
+        return res.json({
+          content: "Audio generation isn't configured on this server right now (missing Lyria credentials), but I'm happy to keep refining the song plan with you!",
+        });
+      }
+
       const isClip = message.toLowerCase().includes('clip') || message.toLowerCase().includes('30 second');
       const modelId = isClip ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
       
       console.log(`[Router] Handing off to ${modelId} for final generation...`);
 
-      const result = await ai.models.generateContent({
+      const result = await lyriaAI.models.generateContent({
         model: modelId,
         contents: [{
           role: 'user',
@@ -164,6 +188,113 @@ app.post('/api/chat', async (req, res) => {
   } catch (error: any) {
     console.error('Error in /api/chat:', error);
     res.status(500).json({ error: { message: error.message || 'An error occurred' } });
+  }
+});
+
+// --- Voice: Text-to-Speech and Speech-to-Text (Gemini via Vertex AI) ---
+
+/** Wraps raw 16-bit PCM in a WAV container so browsers can play it directly. */
+const pcmToWav = (pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer => {
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // PCM format
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+};
+
+const MAX_TTS_CHARS = 5000;
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text, voice } = req.body as { text: string; voice?: string };
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: { message: 'No text provided for speech.' } });
+    }
+
+    const result = await ai.models.generateContent({
+      model: TTS_MODEL,
+      contents: [{ role: 'user', parts: [{ text: text.slice(0, MAX_TTS_CHARS) }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || TTS_VOICE } },
+        },
+      },
+    });
+
+    const audioPart = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data);
+    const data = audioPart?.inlineData?.data;
+    const mimeType = audioPart?.inlineData?.mimeType || '';
+    if (!data) {
+      return res.status(502).json({ error: { message: 'The TTS model returned no audio.' } });
+    }
+
+    // Gemini TTS returns raw PCM (e.g. audio/L16;rate=24000); wrap it as WAV.
+    if (/audio\/(L16|pcm)/i.test(mimeType)) {
+      const rate = parseInt(mimeType.match(/rate=(\d+)/)?.[1] ?? '24000', 10);
+      const wav = pcmToWav(Buffer.from(data, 'base64'), rate);
+      return res.json({ audioData: wav.toString('base64'), mimeType: 'audio/wav' });
+    }
+    return res.json({ audioData: data, mimeType });
+  } catch (error: any) {
+    console.error('Error in /api/tts:', error);
+    res.status(500).json({ error: { message: error.message || 'Text-to-speech failed.' } });
+  }
+});
+
+const MAX_STT_AUDIO_BASE64_CHARS = 15_000_000; // ~11 MB of audio
+
+app.post('/api/stt', async (req, res) => {
+  try {
+    const { audioData, mimeType } = req.body as { audioData: string; mimeType: string };
+    if (typeof audioData !== 'string' || !audioData || !/^audio\//.test(mimeType || '')) {
+      return res.status(400).json({ error: { message: 'No audio provided for transcription.' } });
+    }
+    if (audioData.length > MAX_STT_AUDIO_BASE64_CHARS) {
+      return res.status(413).json({ error: { message: 'Audio recording is too long.' } });
+    }
+
+    const transcribeWith = (model: string) => ai.models.generateContent({
+      model,
+      contents: [{
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType, data: audioData } },
+          { text: 'Transcribe the speech in this audio recording verbatim, with natural punctuation. Output ONLY the transcribed text — no labels, no commentary. If there is no intelligible speech, output nothing.' },
+        ],
+      }],
+    });
+
+    let result;
+    try {
+      result = await transcribeWith(STT_MODEL);
+    } catch (modelError: any) {
+      // Fall back to the pro model if the flash STT model isn't available in this region.
+      if (/not found|NOT_FOUND|does not exist|404/i.test(modelError.message || '')) {
+        console.warn(`STT model ${STT_MODEL} unavailable, falling back to ${STT_FALLBACK_MODEL}`);
+        result = await transcribeWith(STT_FALLBACK_MODEL);
+      } else {
+        throw modelError;
+      }
+    }
+
+    const transcript = (result.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '').trim();
+    res.json({ transcript });
+  } catch (error: any) {
+    console.error('Error in /api/stt:', error);
+    res.status(500).json({ error: { message: error.message || 'Speech-to-text failed.' } });
   }
 });
 

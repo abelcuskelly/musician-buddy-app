@@ -3,6 +3,7 @@ import { useMusicianBuddy } from '../hooks/useMusicianBuddy.js';
 import { useProfile } from '../context/ProfileContext.js';
 import { useAuth } from '../context/AuthContext.tsx';
 import { Message as MessageType } from '../types.js';
+import { speak, stopSpeaking, prepareTextForSpeech } from '../lib/voice.ts';
 import Message from './Message.js';
 import UserInput from './UserInput.js';
 import SettingsModal from './SettingsModal.js';
@@ -12,6 +13,7 @@ import SettingsIcon from './icons/SettingsIcon.js';
 import BotIcon from './icons/BotIcon.js';
 import LibraryIcon from './icons/LibraryIcon.tsx';
 import LogoutIcon from './icons/LogoutIcon.tsx';
+import HeadphonesIcon from './icons/HeadphonesIcon.tsx';
 
 const Chat: React.FC = () => {
   const [messages, setMessages] = useState<MessageType[]>([]);
@@ -19,11 +21,53 @@ const Chat: React.FC = () => {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [handsFree, setHandsFree] = useState(false);
+  const [listenSignal, setListenSignal] = useState(0);
   const { isLoading, sendMessage, error } = useMusicianBuddy(messages, setMessages);
   const { isProfileComplete } = useProfile();
   const { user, signOut } = useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const spokenIdsRef = useRef<Set<string>>(new Set());
+
+  const toggleHandsFree = () => {
+    setHandsFree(prev => {
+      const next = !prev;
+      if (next) {
+        // Don't read the existing conversation back; only speak new replies.
+        messages.forEach(m => spokenIdsRef.current.add(m.id));
+        setListenSignal(s => s + 1); // start listening right away
+      } else {
+        stopSpeaking();
+      }
+      return next;
+    });
+  };
+
+  // Hands-free loop: speak each newly completed model reply, then listen again.
+  useEffect(() => {
+    if (!handsFree || isLoading) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'model' || last.isStreaming || !last.content) return;
+    if (spokenIdsRef.current.has(last.id)) return;
+    spokenIdsRef.current.add(last.id);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await speak(prepareTextForSpeech(last.content));
+      } catch (e) {
+        console.error('Failed to speak reply:', e);
+      }
+      if (!cancelled) {
+        setListenSignal(s => s + 1);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, isLoading, handsFree]);
 
   useEffect(() => {
     if (!isUserMenuOpen) return;
@@ -93,6 +137,17 @@ const Chat: React.FC = () => {
           <h1 className="text-xl font-bold text-[#cdd6f4]">AI Musician Buddy</h1>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={toggleHandsFree}
+            className={`p-2 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#181825] focus:ring-[#89b4fa] transition-colors ${
+              handsFree ? 'bg-[#a6e3a1]/20 text-[#a6e3a1]' : 'hover:bg-white/10 text-[#cdd6f4]'
+            }`}
+            aria-label={handsFree ? 'Turn off hands-free voice mode' : 'Turn on hands-free voice mode'}
+            aria-pressed={handsFree}
+            title={handsFree ? 'Hands-free voice mode is ON' : 'Hands-free voice mode'}
+          >
+            <HeadphonesIcon className="w-6 h-6" />
+          </button>
           {user && (
             <button
               onClick={() => setIsLibraryOpen(true)}
@@ -167,7 +222,18 @@ const Chat: React.FC = () => {
 
       <footer className="p-4 border-t border-gray-700/50 bg-[#1e1e2e]/50">
         {error && <p className="text-center text-red-400 text-sm mb-2">{error}</p>}
-        <UserInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+        {handsFree && (
+          <p className="text-center text-[#a6e3a1] text-xs mb-2 flex items-center justify-center gap-1.5">
+            <span className="w-1.5 h-1.5 bg-[#a6e3a1] rounded-full animate-pulse"></span>
+            Hands-free mode: speak when the mic is listening; replies are read aloud.
+          </p>
+        )}
+        <UserInput
+          onSendMessage={handleSendMessage}
+          isLoading={isLoading}
+          handsFree={handsFree}
+          listenSignal={listenSignal}
+        />
       </footer>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />

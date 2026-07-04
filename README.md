@@ -10,7 +10,7 @@ This application is built with a secure, scalable architecture designed for prod
 *   **Songwriting Assistance:** Helps users craft original songs by suggesting lyrics, melodies, and rhythm patterns from a simple description.
 *   **Technique Critique:** Provides constructive feedback on musical techniques, song structure, and notation.
 *   **Motivational Support:** Acts as a supportive coach and jam buddy, providing encouragement in a user-defined tone.
-*   **Voice Interaction:** Includes a voice-to-text feature for hands-free interaction.
+*   **Voice Interaction & Hands-Free Mode:** Speech-to-text is powered by Gemini STT (tap the mic, talk, and it stops automatically when you pause), and every reply can be read aloud with Gemini Flash TTS. Toggle the headphones icon for full hands-free jamming: speak, get a spoken reply, and the mic re-opens automatically.
 *   **User Accounts:** Sign in with Google or Email + Password (via Firebase Authentication). Apple sign-in is built but hidden until an Apple Developer account is configured.
 *   **Personal Library:** Save generated lesson plans, songs, and audio clips to your profile, then browse, play, re-download, or delete them from any device. Lesson plans and songs can also be downloaded as Markdown files.
 *   **Lyric & Chord Sheets:** Every song written in chat is notated with chords inline, and every generated audio track comes with its own lyric & chord sheet that can be downloaded or saved.
@@ -20,7 +20,7 @@ This application is built with a secure, scalable architecture designed for prod
 
 *   **Frontend:** React, TypeScript, Tailwind CSS
 *   **Backend:** Node.js, Express
-*   **AI:** Google Gemini API
+*   **AI:** Gemini via Vertex AI with service-account auth (chat, TTS, STT); Lyria audio generation via the Gemini Developer API with a Secret Manager key
 *   **Accounts & Storage:** Firebase Authentication, Cloud Firestore, Firebase Storage
 *   **Deployment:** Docker, Google Cloud Run, Cloud Build
 
@@ -37,13 +37,15 @@ To run this project on your local machine for development:
     ```bash
     npm install
     ```
-3.  Create a `.env` file in the root of the project (see `.env.example`) and add your API key:
+3.  Authenticate for the AI backends. Chat, TTS, and STT use Vertex AI with
+    Application Default Credentials:
+    ```bash
+    gcloud auth application-default login
     ```
-    GEMINI_API_KEY=your_gemini_api_key_here
-    ```
-    To enable sign-in and the personal library, also add your Firebase web config
-    (`VITE_FIREBASE_*` variables) — see [AUTH_SETUP.md](./AUTH_SETUP.md) for the full guide.
-    Without them the app still runs; account features are simply disabled.
+    Then create a `.env` file in the root of the project (see `.env.example`).
+    A `GEMINI_API_KEY` is only needed for Lyria audio generation; everything
+    else works without it. See [AUTH_SETUP.md](./AUTH_SETUP.md) for the Firebase
+    (`VITE_FIREBASE_*`) sign-in configuration.
 4.  In one terminal, run the backend server:
     ```bash
     npm run build:server && node dist-server/server.js
