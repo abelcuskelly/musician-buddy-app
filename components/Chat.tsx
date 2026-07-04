@@ -10,7 +10,6 @@ import SettingsModal from './SettingsModal.js';
 import AuthModal from './AuthModal.tsx';
 import LibraryModal from './LibraryModal.tsx';
 import SettingsIcon from './icons/SettingsIcon.js';
-import BotIcon from './icons/BotIcon.js';
 import LibraryIcon from './icons/LibraryIcon.tsx';
 import LogoutIcon from './icons/LogoutIcon.tsx';
 import HeadphonesIcon from './icons/HeadphonesIcon.tsx';
@@ -131,10 +130,8 @@ const Chat: React.FC = () => {
     <div className="flex flex-col h-[95vh] w-full max-w-4xl mx-auto bg-[#181825] rounded-2xl shadow-2xl shadow-black/50 border border-gray-700/50 overflow-hidden">
       <header className="flex items-center justify-between p-4 border-b border-gray-700/50 bg-[#1e1e2e]/50 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-br from-[#89b4fa] to-[#b4befe] rounded-lg">
-            <BotIcon className="w-6 h-6 text-gray-900" />
-          </div>
-          <h1 className="text-xl font-bold text-[#cdd6f4]">AI Musician Buddy</h1>
+          <img src="/jam-buddy-logo.png" alt="Jam Buddy logo" className="w-10 h-10 rounded-lg" />
+          <h1 className="text-xl font-bold text-[#cdd6f4]">Jam Buddy</h1>
         </div>
         <div className="flex items-center gap-2">
           <button

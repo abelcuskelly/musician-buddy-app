@@ -4,7 +4,6 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { classifyMessage, extractTitle, downloadMarkdown } from '../lib/content.ts';
 import { saveMessageToLibrary } from '../services/library.ts';
 import { SharePayload } from '../lib/share.ts';
-import { speak, stopSpeaking, prepareTextForSpeech } from '../lib/voice.ts';
 import MarkdownContent from './MarkdownContent.tsx';
 import ShareButton from './ShareButton.tsx';
 import BotIcon from './icons/BotIcon.js';
@@ -12,8 +11,6 @@ import UserIcon from './icons/UserIcon.js';
 import DownloadIcon from './icons/DownloadIcon.tsx';
 import BookmarkIcon from './icons/BookmarkIcon.tsx';
 import CheckIcon from './icons/CheckIcon.tsx';
-import SpeakerIcon from './icons/SpeakerIcon.tsx';
-import StopIcon from './icons/StopIcon.tsx';
 
 interface MessageProps {
   message: MessageType;
@@ -30,27 +27,8 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
   const isModel = message.role === 'model';
   const { user } = useAuth();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [speechState, setSpeechState] = useState<'idle' | 'loading' | 'speaking'>('idle');
 
   const savedType = isModel && !message.isStreaming ? classifyMessage(message) : null;
-  const canSpeak = isModel && !message.isStreaming && message.content.trim().length > 0;
-
-  const handleSpeakClick = async () => {
-    if (speechState !== 'idle') {
-      stopSpeaking();
-      setSpeechState('idle');
-      return;
-    }
-    setSpeechState('loading');
-    try {
-      setSpeechState('speaking');
-      await speak(prepareTextForSpeech(message.content));
-    } catch (e) {
-      console.error('Read-aloud failed:', e);
-    } finally {
-      setSpeechState('idle');
-    }
-  };
   // For generated audio, the lyric & chord sheet is the canonical text content.
   const sheetContent = savedType === 'audio' ? (message.lyricsSheet || message.content) : message.content;
   const title = savedType ? extractTitle(sheetContent, savedType) : '';
@@ -142,33 +120,8 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
               </div>
             )}
 
-            {(savedType || canSpeak) && (
+            {savedType && (
               <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2 flex-wrap">
-                {canSpeak && (
-                  <button
-                    onClick={handleSpeakClick}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      speechState !== 'idle'
-                        ? 'bg-[#a6e3a1]/15 text-[#a6e3a1]'
-                        : 'bg-[#313244] hover:bg-[#45475a] text-[#f9e2af]'
-                    }`}
-                    aria-label={speechState === 'idle' ? 'Read this message aloud' : 'Stop reading aloud'}
-                  >
-                    {speechState === 'idle' ? (
-                      <>
-                        <SpeakerIcon className="w-3.5 h-3.5" />
-                        Read Aloud
-                      </>
-                    ) : (
-                      <>
-                        <StopIcon className="w-3.5 h-3.5" />
-                        {speechState === 'loading' ? 'Loading...' : 'Stop'}
-                      </>
-                    )}
-                  </button>
-                )}
-                {savedType && (
-                <>
                 <button
                   onClick={handleDownloadSheet}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
@@ -202,8 +155,6 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                 <ShareButton getPayload={getSharePayload} />
                 {saveState === 'error' && (
                   <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
-                )}
-                </>
                 )}
               </div>
             )}

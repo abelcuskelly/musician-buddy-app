@@ -113,7 +113,9 @@ const UserInput: React.FC<UserInputProps> = ({ onSendMessage, isLoading, handsFr
     ? 'Listening... (stops automatically when you pause)'
     : voiceState === 'transcribing'
       ? 'Transcribing your voice...'
-      : 'Ask for a lesson, critique, or start a song...';
+      : handsFree
+        ? 'Hands-free mode on — tap the mic or just type...'
+        : 'Ask for a lesson, critique, or start a song...';
 
   return (
     <form onSubmit={handleSubmit}>
@@ -130,21 +132,23 @@ const UserInput: React.FC<UserInputProps> = ({ onSendMessage, isLoading, handsFr
           aria-label="Chat input"
         />
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleMicClick}
-            disabled={isLoading || voiceState === 'transcribing'}
-            className={`p-2 rounded-full transition-colors ${
-              voiceState === 'recording'
-                ? 'bg-red-500/80 text-white animate-pulse'
-                : voiceState === 'transcribing'
-                  ? 'bg-[#89b4fa]/30 text-[#89b4fa] animate-pulse'
-                  : 'hover:bg-white/10 text-[#cdd6f4]'
-            } disabled:opacity-60`}
-            aria-label={voiceState === 'recording' ? 'Stop listening' : 'Start listening'}
-          >
-            <MicrophoneIcon className="w-5 h-5" />
-          </button>
+          {handsFree && (
+            <button
+              type="button"
+              onClick={handleMicClick}
+              disabled={isLoading || voiceState === 'transcribing'}
+              className={`p-2 rounded-full transition-colors ${
+                voiceState === 'recording'
+                  ? 'bg-red-500/80 text-white animate-pulse'
+                  : voiceState === 'transcribing'
+                    ? 'bg-[#89b4fa]/30 text-[#89b4fa] animate-pulse'
+                    : 'hover:bg-white/10 text-[#cdd6f4]'
+              } disabled:opacity-60`}
+              aria-label={voiceState === 'recording' ? 'Stop listening' : 'Start listening'}
+            >
+              <MicrophoneIcon className="w-5 h-5" />
+            </button>
+          )}
           <button
             type="submit"
             disabled={isLoading || !input.trim()}

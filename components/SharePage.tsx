@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { ShareRecord, fetchShare } from '../lib/share.ts';
 import { downloadMarkdown } from '../lib/content.ts';
 import MarkdownContent from './MarkdownContent.tsx';
-import BotIcon from './icons/BotIcon.tsx';
 import DownloadIcon from './icons/DownloadIcon.tsx';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -31,10 +30,8 @@ const SharePage: React.FC<SharePageProps> = ({ shareId }) => {
     <div className="min-h-screen bg-[#11111b] flex flex-col items-center px-4 py-10">
       <div className="w-full max-w-3xl">
         <a href="/" className="flex items-center gap-3 mb-8 group w-fit">
-          <div className="p-2 bg-gradient-to-br from-[#89b4fa] to-[#b4befe] rounded-lg">
-            <BotIcon className="w-6 h-6 text-gray-900" />
-          </div>
-          <span className="text-xl font-bold text-[#cdd6f4] group-hover:text-white transition-colors">AI Musician Buddy</span>
+          <img src="/jam-buddy-logo.png" alt="Jam Buddy logo" className="w-10 h-10 rounded-lg" />
+          <span className="text-xl font-bold text-[#cdd6f4] group-hover:text-white transition-colors">Jam Buddy</span>
         </a>
 
         {error ? (
@@ -59,7 +56,7 @@ const SharePage: React.FC<SharePageProps> = ({ shareId }) => {
                   </span>
                   <h1 className="text-2xl font-bold text-[#cdd6f4] mt-2">{share.title}</h1>
                   <p className="text-xs text-gray-500 mt-1">
-                    Shared {new Date(share.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })} via AI Musician Buddy
+                    Shared {new Date(share.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })} via Jam Buddy
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -98,7 +95,7 @@ const SharePage: React.FC<SharePageProps> = ({ shareId }) => {
         )}
 
         <p className="text-center text-gray-500 text-sm mt-8">
-          Created with <a href="/" className="text-[#89b4fa] hover:underline">AI Musician Buddy</a> — your AI jam partner for lessons, songwriting, and more.
+          Created with <a href="/" className="text-[#89b4fa] hover:underline">Jam Buddy</a> — your AI jam partner for lessons, songwriting, and more.
         </p>
       </div>
     </div>

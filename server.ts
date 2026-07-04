@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Chat, Content } from '@google/genai';
+import { GoogleAuth, Impersonated } from 'google-auth-library';
 import { initializeApp as initializeAdminApp, getApps as getAdminApps, App as AdminApp } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { getStorage as getAdminStorage } from 'firebase-admin/storage';
@@ -30,15 +31,77 @@ const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'global';
 
 const ai = new GoogleGenAI({ vertexai: true, project: VERTEX_PROJECT, location: VERTEX_LOCATION });
 
-// --- Lyria (audio generation) via the Gemini Developer API ---
-// Lyria models are not served on Vertex AI, so this is the one call that still
-// needs an API key. In production the key is injected from Secret Manager
-// (musician-buddy-api-key), never stored as a plaintext env var.
-const LYRIA_API_KEY = process.env.GEMINI_API_KEY;
-const lyriaAI = LYRIA_API_KEY ? new GoogleGenAI({ apiKey: LYRIA_API_KEY, vertexai: false }) : null;
-if (!lyriaAI) {
-  console.warn('GEMINI_API_KEY not set: Lyria audio generation is disabled (chat/TTS/STT unaffected).');
+// --- Lyria 3 via the Interactions API (service-account auth, no API keys) ---
+// https://ai.google.dev/gemini-api/docs/music-generation
+// Lyria is served by the Gemini Interactions API, which accepts OAuth tokens
+// carrying the generative-language scope. On Cloud Run the service account
+// mints these directly from the metadata server; for local development (where
+// ADC is a user credential that can't carry that scope) we impersonate the
+// same service account.
+const LYRIA_SCOPE = 'https://www.googleapis.com/auth/generative-language';
+const LYRIA_SERVICE_ACCOUNT = process.env.LYRIA_SERVICE_ACCOUNT || '243585371458-compute@developer.gserviceaccount.com';
+const INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+
+const lyriaAuth = new GoogleAuth({ scopes: [LYRIA_SCOPE] });
+
+const getLyriaAccessToken = async (): Promise<string> => {
+  const client = await lyriaAuth.getClient();
+  // Service-account credentials (Cloud Run / GCE metadata) honor the requested
+  // scope directly. User ADC needs to impersonate the service account instead.
+  const isUserCredential = client.constructor.name === 'UserRefreshClient';
+  const tokenClient = isUserCredential
+    ? new Impersonated({
+        sourceClient: client,
+        targetPrincipal: LYRIA_SERVICE_ACCOUNT,
+        targetScopes: [LYRIA_SCOPE],
+        lifetime: 3600,
+        delegates: [],
+      })
+    : client;
+  const { token } = await tokenClient.getAccessToken();
+  if (!token) throw new Error('Failed to obtain an access token for Lyria.');
+  return token;
+};
+
+interface LyriaOutput {
+  audioBase64: string;
+  lyrics: string;
 }
+
+/** Calls a Lyria 3 model through the Interactions API and parses the steps. */
+const generateLyriaMusic = async (model: string, input: string): Promise<LyriaOutput> => {
+  const token = await getLyriaAccessToken();
+  const response = await fetch(INTERACTIONS_URL, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, input }),
+  });
+
+  const interaction: any = await response.json();
+  if (!response.ok) {
+    const message = interaction?.error?.message || `Lyria request failed (HTTP ${response.status}).`;
+    const blocked = interaction?.error?.code === 'content_blocked';
+    const error: any = new Error(message);
+    error.contentBlocked = blocked;
+    throw error;
+  }
+
+  // Interactions return a sequence of steps; model_output steps hold content
+  // blocks of type "audio" (base64 MP3) and "text" (lyrics / song structure).
+  let audioBase64 = '';
+  const lyricsParts: string[] = [];
+  for (const step of interaction.steps ?? []) {
+    if (step.type !== 'model_output') continue;
+    for (const block of step.content ?? []) {
+      if (block.type === 'audio' && block.data) {
+        audioBase64 = block.data;
+      } else if (block.type === 'text' && block.text) {
+        lyricsParts.push(block.text);
+      }
+    }
+  }
+  return { audioBase64, lyrics: lyricsParts.join('\n').trim() };
+};
 
 // Voice models (overridable via env without a code change).
 // Model IDs verified against the Vertex AI global endpoint for this project.
@@ -76,73 +139,58 @@ app.post('/api/chat', async (req, res) => {
     const isExecutionRequest = triggerKeywords.some(kw => message.toLowerCase().includes(kw));
 
     if (isExecutionRequest) {
-      if (!lyriaAI) {
-        return res.json({
-          content: "Audio generation isn't configured on this server right now (missing Lyria credentials), but I'm happy to keep refining the song plan with you!",
-        });
-      }
-
       const isClip = message.toLowerCase().includes('clip') || message.toLowerCase().includes('30 second');
       const modelId = isClip ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
       
       console.log(`[Router] Handing off to ${modelId} for final generation...`);
 
-      const result = await lyriaAI.models.generateContent({
-        model: modelId,
-        contents: [{
-          role: 'user',
-          parts: [{ 
-            text: `Final Production Request: ${message}. 
-            Context: ${profile?.skillLevel} ${profile?.instrument} player. 
-            Please generate the high-fidelity 44.1kHz audio track now based on our previous planning.` 
-          }]
-        }]
-      });
+      // Build a rich Lyria prompt from the planning session (Lyria is
+      // single-turn, so the musical direction must all be in one input).
+      const planningContext = history
+        .filter((m: Message) => m.content)
+        .slice(-20)
+        .map((m: Message) => `${m.role === 'user' ? 'Musician' : 'Producer'}: ${m.content}`)
+        .join('\n\n');
 
-      let audioBase64 = "";
-      let textContent = "";
+      const lyriaInput = `${message}
 
-      const parts = result.candidates?.[0]?.content?.parts;
-      if (parts) {
-        for (const part of parts) {
-          const text = part.text;
-          if (typeof text === 'string') {
-            textContent += text;
-          }
-          const data = part.inlineData?.data;
-          if (typeof data === 'string') {
-            audioBase64 = data;
-          }
-        }
+Musical direction from our production session (genre, instruments, BPM, key, structure, and lyrics to follow):
+${planningContext || `A piece suited to a ${profile?.skillLevel ?? 'beginner'} ${profile?.instrument ?? 'guitar'} player who loves ${profile?.musicGenres ?? 'popular'} music.`}`;
+
+      let lyriaResult: LyriaOutput;
+      try {
+        lyriaResult = await generateLyriaMusic(modelId, lyriaInput);
+      } catch (lyriaError: any) {
+        console.error('Lyria generation failed:', lyriaError);
+        return res.json({
+          content: lyriaError.contentBlocked
+            ? "The music generator's safety filters blocked that request — this can happen when a prompt references a specific artist's voice or copyrighted lyrics. Let's tweak the concept or lyrics and try again!"
+            : "I hit a snag producing the track just now. Let's try generating it again in a moment!",
+        });
       }
 
-      // Produce the lyric & chord sheet for the generated track so it can be
-      // shown in the chat, saved to the user's library, and shared.
+      // Turn Lyria's own generated lyrics/structure into a polished lyric &
+      // chord sheet for the chat, the user's library, and sharing.
       let lyricsSheet = "";
       try {
-        const planningContext = history
-          .filter((m: Message) => m.content)
-          .slice(-20)
-          .map((m: Message) => `${m.role === 'user' ? 'Musician' : 'Producer'}: ${m.content}`)
-          .join('\n\n');
-
         const sheetResult = await ai.models.generateContent({
           model: 'gemini-3.1-pro-preview',
           contents: [{
             role: 'user',
             parts: [{
-              text: `Here is the songwriting session that led to a final produced track:\n\n${planningContext}\n\nFinal production request: ${message}\n\nWrite the definitive lyric & chord sheet for this song in Markdown. Requirements:\n- Start with a "# " heading containing the song title.\n- Include key, tempo (BPM), and time signature on one line.\n- Notate chords inline above or within the lyrics using bracket notation, e.g. [G], [Em7], [D/F#].\n- Label every section ([Verse 1], [Chorus], [Bridge], etc.).\n- If the session did not define lyrics (instrumental), provide the chord chart and section structure instead.\n- Output ONLY the sheet itself, no commentary.`
+              text: `A music model just produced a track. ${lyriaResult.lyrics ? `Here are the exact lyrics and song structure it generated:\n\n${lyriaResult.lyrics}` : 'It is an instrumental piece with no lyrics.'}\n\nHere is the songwriting session that led to it:\n\n${planningContext}\n\nWrite the definitive lyric & chord sheet for this song in Markdown. Requirements:\n- Use the generated lyrics EXACTLY as provided (do not rewrite them); add chord notation around them.\n- Start with a "# " heading containing the song title.\n- Include key, tempo (BPM), and time signature on one line.\n- Notate chords inline with the lyrics using bracket notation, e.g. [G], [Em7], [D/F#].\n- Label every section ([Verse 1], [Chorus], [Bridge], etc.).\n- If instrumental, provide the chord chart and section structure instead.\n- Output ONLY the sheet itself, no commentary.`
             }]
           }]
         });
         lyricsSheet = sheetResult.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
       } catch (sheetError) {
         console.error('Failed to generate lyric sheet:', sheetError);
+        lyricsSheet = lyriaResult.lyrics; // fall back to Lyria's raw lyrics
       }
 
       return res.json({
-        content: textContent || "Your track has been produced! Listen or download below.",
-        audioData: audioBase64,
+        content: "Your track has been produced! Listen or download below.",
+        audioData: lyriaResult.audioBase64,
         lyricsSheet
       });
     }

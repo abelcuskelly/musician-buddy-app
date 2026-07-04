@@ -20,7 +20,7 @@ This application is built with a secure, scalable architecture designed for prod
 
 *   **Frontend:** React, TypeScript, Tailwind CSS
 *   **Backend:** Node.js, Express
-*   **AI:** Gemini via Vertex AI with service-account auth (chat, TTS, STT); Lyria audio generation via the Gemini Developer API with a Secret Manager key
+*   **AI:** Gemini via Vertex AI (chat, TTS, STT) and Lyria 3 via the Gemini Interactions API — all authenticated as the Google Cloud service account, no API keys
 *   **Accounts & Storage:** Firebase Authentication, Cloud Firestore, Firebase Storage
 *   **Deployment:** Docker, Google Cloud Run, Cloud Build
 

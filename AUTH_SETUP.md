@@ -81,6 +81,9 @@ Storage: shares/{shareId}.mp3             (served only via the backend)
 
 ## Local development
 
-`.env` in the repo root (gitignored) holds `GEMINI_API_KEY` and the `VITE_FIREBASE_*`
-values; the server loads it automatically via `process.loadEnvFile()`. For the share
-endpoints to work locally you also need ADC: `gcloud auth application-default login`.
+`.env` in the repo root (gitignored) holds the `VITE_FIREBASE_*` values; the server
+loads it automatically via `process.loadEnvFile()`. All AI calls (Gemini via Vertex AI,
+Lyria via the Interactions API) and the share endpoints authenticate as the service
+account — locally that means ADC (`gcloud auth application-default login`); the Lyria
+call impersonates the Cloud Run service account, which requires your user to hold
+`roles/iam.serviceAccountTokenCreator` on it (already granted).
