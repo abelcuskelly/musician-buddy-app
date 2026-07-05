@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Message as MessageType } from '../types.js';
 import { useAuth } from '../context/AuthContext.tsx';
-import { classifyMessage, extractTitle, downloadMarkdown } from '../lib/content.ts';
-import { saveMessageToLibrary } from '../services/library.ts';
+import { getMessageArtifacts, stripArtifactMarkers, downloadMarkdown, MessageArtifact } from '../lib/content.ts';
+import { saveArtifactToLibrary } from '../services/library.ts';
 import { SharePayload } from '../lib/share.ts';
 import MarkdownContent from './MarkdownContent.tsx';
 import ShareButton from './ShareButton.tsx';
@@ -21,46 +21,50 @@ interface MessageProps {
 // song-related buttons and vice versa.
 const TYPE_LABELS: Record<string, { save: string; download: string; share: string }> = {
   'lesson-plan': { save: 'Save Lesson Plan', download: 'Download Lesson Plan', share: 'Share Lesson Plan' },
-  song: { save: 'Save Song', download: 'Download Song Sheet', share: 'Share Song' },
+  song: { save: 'Save Song Sheet', download: 'Download Song Sheet', share: 'Share Song Sheet' },
   audio: { save: 'Save Audio', download: 'Download Sheet', share: 'Share Audio' },
 };
 
 const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
   const isModel = message.role === 'model';
   const { user } = useAuth();
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveStates, setSaveStates] = useState<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
 
-  const savedType = isModel && !message.isStreaming ? classifyMessage(message) : null;
-  // For generated audio, the lyric & chord sheet is the canonical text content.
-  const sheetContent = savedType === 'audio' ? (message.lyricsSheet || message.content) : message.content;
-  const title = savedType ? extractTitle(sheetContent, savedType) : '';
+  // The saveable artifacts in this message — exact plan/sheet text, not the
+  // whole chat reply. Audio messages carry their audioData alongside.
+  const artifacts = useMemo<MessageArtifact[]>(
+    () => (isModel && !message.isStreaming ? getMessageArtifacts(message) : []),
+    [isModel, message]
+  );
 
-  const handleDownloadSheet = () => {
-    downloadMarkdown(title, sheetContent);
-  };
-
-  const handleSave = async () => {
+  const handleSave = async (artifact: MessageArtifact, index: number) => {
     if (!user) {
       onRequireSignIn();
       return;
     }
-    if (saveState === 'saving' || saveState === 'saved') return;
-    setSaveState('saving');
+    const state = saveStates[index] ?? 'idle';
+    if (state === 'saving' || state === 'saved') return;
+    setSaveStates(prev => ({ ...prev, [index]: 'saving' }));
     try {
-      await saveMessageToLibrary(user.uid, message);
-      setSaveState('saved');
+      await saveArtifactToLibrary(user.uid, {
+        type: artifact.type,
+        title: artifact.title,
+        content: artifact.content,
+        ...(artifact.type === 'audio' && message.audioData ? { audioData: message.audioData } : {}),
+      });
+      setSaveStates(prev => ({ ...prev, [index]: 'saved' }));
     } catch (e) {
       console.error('Failed to save to profile:', e);
-      setSaveState('error');
+      setSaveStates(prev => ({ ...prev, [index]: 'error' }));
     }
   };
 
-  const getSharePayload = (): SharePayload => ({
-    type: savedType ?? 'song',
-    title,
+  const getSharePayload = (artifact: MessageArtifact): SharePayload => ({
+    type: artifact.type,
+    title: artifact.title,
     // Sharing generated audio always includes the lyric & chord sheet.
-    content: sheetContent,
-    ...(message.audioData ? { audioData: message.audioData } : {}),
+    content: artifact.content,
+    ...(artifact.type === 'audio' && message.audioData ? { audioData: message.audioData } : {}),
   });
 
   return (
@@ -78,7 +82,7 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
           </div>
         ) : (
           <>
-            <MarkdownContent content={message.content} />
+            <MarkdownContent content={isModel ? stripArtifactMarkers(message.content) : message.content} />
 
             {message.audioData && (
               <div className="mt-4 p-4 bg-[#181825] rounded-xl border border-gray-700 shadow-inner">
@@ -109,57 +113,57 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                   <span className="text-xs font-bold text-[#f9e2af] uppercase tracking-widest">
                     Lyrics &amp; Chord Sheet
                   </span>
-                  <button
-                    onClick={handleDownloadSheet}
-                    className="text-xs text-[#89b4fa] hover:text-[#b4befe] transition-colors flex items-center gap-1 font-medium"
-                    aria-label="Download lyric and chord sheet"
-                  >
-                    <DownloadIcon className="w-3.5 h-3.5" />
-                    Download Sheet
-                  </button>
                 </div>
                 <MarkdownContent content={message.lyricsSheet} />
               </div>
             )}
 
-            {savedType && (
-              <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={handleDownloadSheet}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
-                  aria-label="Download as Markdown"
-                >
-                  <DownloadIcon className="w-3.5 h-3.5" />
-                  {TYPE_LABELS[savedType].download}
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={saveState === 'saving' || saveState === 'saved'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    saveState === 'saved'
-                      ? 'bg-[#a6e3a1]/15 text-[#a6e3a1] cursor-default'
-                      : 'bg-[#313244] hover:bg-[#45475a] text-[#cba6f7]'
-                  } disabled:opacity-80`}
-                  aria-label="Save to profile"
-                >
-                  {saveState === 'saved' ? (
-                    <>
-                      <CheckIcon className="w-3.5 h-3.5" />
-                      Saved to Profile
-                    </>
-                  ) : (
-                    <>
-                      <BookmarkIcon className="w-3.5 h-3.5" filled={false} />
-                      {saveState === 'saving' ? 'Saving...' : TYPE_LABELS[savedType].save}
-                    </>
+            {artifacts.map((artifact, index) => {
+              const state = saveStates[index] ?? 'idle';
+              return (
+                <div key={index} className="mt-3 pt-3 border-t border-gray-700/50">
+                  {artifacts.length > 1 && (
+                    <p className="text-xs text-gray-500 mb-1.5 truncate">{artifact.title}</p>
                   )}
-                </button>
-                <ShareButton getPayload={getSharePayload} label={TYPE_LABELS[savedType].share} />
-                {saveState === 'error' && (
-                  <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
-                )}
-              </div>
-            )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => downloadMarkdown(artifact.title, artifact.content)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#89b4fa] text-xs font-medium transition-colors"
+                      aria-label={`${TYPE_LABELS[artifact.type].download}: ${artifact.title}`}
+                    >
+                      <DownloadIcon className="w-3.5 h-3.5" />
+                      {TYPE_LABELS[artifact.type].download}
+                    </button>
+                    <button
+                      onClick={() => handleSave(artifact, index)}
+                      disabled={state === 'saving' || state === 'saved'}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        state === 'saved'
+                          ? 'bg-[#a6e3a1]/15 text-[#a6e3a1] cursor-default'
+                          : 'bg-[#313244] hover:bg-[#45475a] text-[#cba6f7]'
+                      } disabled:opacity-80`}
+                      aria-label={`${TYPE_LABELS[artifact.type].save}: ${artifact.title}`}
+                    >
+                      {state === 'saved' ? (
+                        <>
+                          <CheckIcon className="w-3.5 h-3.5" />
+                          Saved to Profile
+                        </>
+                      ) : (
+                        <>
+                          <BookmarkIcon className="w-3.5 h-3.5" filled={false} />
+                          {state === 'saving' ? 'Saving...' : TYPE_LABELS[artifact.type].save}
+                        </>
+                      )}
+                    </button>
+                    <ShareButton getPayload={() => getSharePayload(artifact)} label={TYPE_LABELS[artifact.type].share} />
+                    {state === 'error' && (
+                      <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </>
         )}
       </div>

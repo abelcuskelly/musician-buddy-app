@@ -9,8 +9,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadString, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db, storage } from '../lib/firebase.ts';
-import { Message, SavedItem, SavedItemType } from '../types.ts';
-import { classifyMessage, extractTitle } from '../lib/content.ts';
+import { SavedItem, SavedItemType } from '../types.ts';
 
 const NOT_CONFIGURED_ERROR = 'Saving is not configured yet. See AUTH_SETUP.md for Firebase setup instructions.';
 
@@ -19,33 +18,36 @@ const libraryCollection = (uid: string) => {
   return collection(db, 'users', uid, 'library');
 };
 
+export interface SaveArtifactParams {
+  type: SavedItemType;
+  title: string;
+  content: string; // exactly the artifact text (plan/sheet), not the whole chat reply
+  audioData?: string; // base64 MP3 for generated tracks
+}
+
 /**
- * Saves a generated message (lesson plan, song, or audio clip) to the user's
- * profile library. Audio is uploaded to Firebase Storage; text goes to Firestore.
+ * Saves a specific artifact (lesson plan, song sheet, or audio clip) to the
+ * user's library. Audio is uploaded to Firebase Storage; text to Firestore.
  */
-export const saveMessageToLibrary = async (uid: string, message: Message): Promise<SavedItem> => {
-  const type: SavedItemType = classifyMessage(message) ?? 'song';
-  // For generated audio, the lyric & chord sheet is the canonical text content.
-  const textContent = type === 'audio' ? (message.lyricsSheet || message.content) : message.content;
-  const title = extractTitle(textContent, type);
+export const saveArtifactToLibrary = async (uid: string, params: SaveArtifactParams): Promise<SavedItem> => {
   const itemRef = doc(libraryCollection(uid));
 
   let audioUrl: string | undefined;
   let audioPath: string | undefined;
 
-  if (message.audioData) {
+  if (params.audioData) {
     if (!storage) throw new Error(NOT_CONFIGURED_ERROR);
     audioPath = `users/${uid}/audio/${itemRef.id}.mp3`;
     const audioRef = ref(storage, audioPath);
-    await uploadString(audioRef, message.audioData, 'base64', { contentType: 'audio/mp3' });
+    await uploadString(audioRef, params.audioData, 'base64', { contentType: 'audio/mp3' });
     audioUrl = await getDownloadURL(audioRef);
   }
 
   const item: SavedItem = {
     id: itemRef.id,
-    type,
-    title,
-    content: textContent,
+    type: params.type,
+    title: params.title,
+    content: params.content,
     createdAt: Date.now(),
     ...(audioUrl ? { audioUrl, audioPath } : {}),
   };
