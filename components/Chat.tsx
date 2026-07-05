@@ -4,6 +4,7 @@ import { useProfile } from '../context/ProfileContext.js';
 import { useAuth } from '../context/AuthContext.tsx';
 import { Message as MessageType } from '../types.js';
 import { speak, stopSpeaking, prepareTextForSpeech } from '../lib/voice.ts';
+import { saveChatSession, ChatSession } from '../services/chats.ts';
 import Message from './Message.js';
 import UserInput from './UserInput.js';
 import SettingsModal from './SettingsModal.js';
@@ -33,6 +34,33 @@ const Chat: React.FC<ChatProps> = ({ onStartJam }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const spokenIdsRef = useRef<Set<string>>(new Set());
+  const sessionIdRef = useRef(`chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const chatSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-save the session to the signed-in user's chat history (debounced).
+  useEffect(() => {
+    if (!user || isLoading) return;
+    if (!messages.some(m => m.role === 'user')) return;
+    if (chatSaveTimer.current) clearTimeout(chatSaveTimer.current);
+    chatSaveTimer.current = setTimeout(() => {
+      saveChatSession(user.uid, sessionIdRef.current, messages).catch(e =>
+        console.error('Failed to save chat session:', e)
+      );
+    }, 2500);
+    return () => {
+      if (chatSaveTimer.current) clearTimeout(chatSaveTimer.current);
+    };
+  }, [messages, isLoading, user]);
+
+  // Resuming a past session replaces the conversation and keeps writing to
+  // the same history entry.
+  const handleResumeChat = (session: ChatSession) => {
+    sessionIdRef.current = session.id;
+    const restored: MessageType[] = session.messages.map(m => ({ ...m }));
+    restored.forEach(m => spokenIdsRef.current.add(m.id)); // don't read old replies aloud
+    setMessages(restored);
+    setIsLibraryOpen(false);
+  };
 
   const toggleHandsFree = () => {
     setHandsFree(prev => {
@@ -248,7 +276,7 @@ const Chat: React.FC<ChatProps> = ({ onStartJam }) => {
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
-      <LibraryModal isOpen={isLibraryOpen} onClose={() => setIsLibraryOpen(false)} />
+      <LibraryModal isOpen={isLibraryOpen} onClose={() => setIsLibraryOpen(false)} onResumeChat={handleResumeChat} />
     </div>
   );
 };

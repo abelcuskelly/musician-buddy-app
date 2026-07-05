@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { SavedItem, SavedItemType } from '../types.ts';
 import { listLibraryItems, deleteLibraryItem } from '../services/library.ts';
+import { listChatSessions, deleteChatSession, ChatSession } from '../services/chats.ts';
 import { downloadMarkdown, downloadAudioFromUrl } from '../lib/content.ts';
 import { SharePayload, blobToBase64 } from '../lib/share.ts';
 import ShareButton from './ShareButton.tsx';
@@ -13,15 +14,18 @@ import LibraryIcon from './icons/LibraryIcon.tsx';
 interface LibraryModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Loads a past chat session back into the conversation. */
+  onResumeChat?: (session: ChatSession) => void;
 }
 
-type Filter = 'all' | SavedItemType;
+type Filter = 'all' | SavedItemType | 'chats';
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'lesson-plan', label: 'Lesson Plans' },
   { id: 'song', label: 'Songs' },
   { id: 'audio', label: 'Audio' },
+  { id: 'chats', label: 'Chats' },
 ];
 
 const TYPE_BADGES: Record<SavedItemType, { label: string; className: string }> = {
@@ -30,9 +34,10 @@ const TYPE_BADGES: Record<SavedItemType, { label: string; className: string }> =
   audio: { label: 'Audio', className: 'bg-[#cba6f7]/15 text-[#cba6f7]' },
 };
 
-const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
+const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose, onResumeChat }) => {
   const { user } = useAuth();
   const [items, setItems] = useState<SavedItem[]>([]);
+  const [chats, setChats] = useState<ChatSession[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -43,7 +48,12 @@ const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
     setIsLoading(true);
     setError(null);
     try {
-      setItems(await listLibraryItems(user.uid));
+      const [libraryItems, chatSessions] = await Promise.all([
+        listLibraryItems(user.uid),
+        listChatSessions(user.uid).catch(() => [] as ChatSession[]),
+      ]);
+      setItems(libraryItems);
+      setChats(chatSessions);
     } catch (e: any) {
       console.error('Failed to load library:', e);
       setError(e.message || 'Failed to load your library.');
@@ -92,7 +102,19 @@ const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
     return { type: item.type, title: item.title, content: item.content, ...(audioData ? { audioData } : {}) };
   };
 
-  const visibleItems = filter === 'all' ? items : items.filter(item => item.type === filter);
+  const handleDeleteChat = async (session: ChatSession) => {
+    if (!user) return;
+    if (!window.confirm(`Delete the chat "${session.title}" from your history?`)) return;
+    try {
+      await deleteChatSession(user.uid, session.id);
+      setChats(prev => prev.filter(c => c.id !== session.id));
+    } catch (e: any) {
+      console.error('Failed to delete chat:', e);
+      setError(e.message || 'Failed to delete the chat.');
+    }
+  };
+
+  const visibleItems = filter === 'all' || filter === 'chats' ? items : items.filter(item => item.type === filter);
 
   return (
     <div
@@ -143,6 +165,50 @@ const LibraryModal: React.FC<LibraryModalProps> = ({ isOpen, onClose }) => {
 
           {isLoading ? (
             <p className="text-gray-400 text-center py-8">Loading your library...</p>
+          ) : filter === 'chats' ? (
+            chats.length === 0 ? (
+              <p className="text-gray-400 text-center py-8">
+                No saved chats yet. Conversations are saved to your history automatically while you're signed in.
+              </p>
+            ) : (
+              chats.map(session => (
+                <div key={session.id} className="bg-[#181825] border border-gray-700/50 rounded-xl p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#89b4fa]/15 text-[#89b4fa]">
+                          Chat
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {new Date(session.updatedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                          {' · '}{session.messageCount} messages
+                        </span>
+                      </div>
+                      <p className="text-[#cdd6f4] font-medium mt-1 truncate">{session.title}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {onResumeChat && (
+                        <button
+                          onClick={() => onResumeChat(session)}
+                          className="px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#a6e3a1] text-xs font-semibold transition-colors"
+                          aria-label={`Resume chat: ${session.title}`}
+                        >
+                          Open
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteChat(session)}
+                        className="p-2 rounded-full hover:bg-red-500/20 text-red-400 transition-colors"
+                        aria-label={`Delete chat: ${session.title}`}
+                        title="Delete"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )
           ) : visibleItems.length === 0 ? (
             <p className="text-gray-400 text-center py-8">
               Nothing saved here yet. Generate a lesson plan or song, then hit "Save to Profile".
