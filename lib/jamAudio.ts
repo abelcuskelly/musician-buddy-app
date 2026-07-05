@@ -5,7 +5,10 @@
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
-const JITTER_BUFFER_SECONDS = 1.5;
+// Streaming ~2.5s ahead absorbs network jitter AND bridges hard transitions:
+// when BPM/key changes reset the model's context, the buffered audio keeps
+// playing while fresh chunks arrive, so there's no silent gap.
+const JITTER_BUFFER_SECONDS = 2.5;
 
 export class JamAudioPlayer {
   private context: AudioContext;

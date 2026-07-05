@@ -16,9 +16,6 @@ export interface JamConfig {
   temperature: number; // "Chaos", 0..3
   bpm?: number; // 60..200 (undefined = model decides)
   scale: string; // Scale enum value or 'SCALE_UNSPECIFIED'
-  muteDrums: boolean;
-  muteBass: boolean;
-  muteOther: boolean; // maps to onlyBassAndDrums
 }
 
 export interface JamSessionCallbacks {
@@ -26,10 +23,11 @@ export interface JamSessionCallbacks {
   onAudioChunk: (base64Data: string) => void;
   onFilteredPrompt: (text: string, reason: string) => void;
   onError: (message: string) => void;
-  onEnded: (reason?: string) => void;
+  onEnded: (reason?: string, upsell?: boolean) => void;
   onShared: (path: string) => void;
   onShareError: (message: string) => void;
   onDisconnect: () => void;
+  onSessionLimit?: (minutes: number) => void;
 }
 
 export class JamSession {
@@ -56,9 +54,10 @@ export class JamSession {
         case 'audio': this.callbacks.onAudioChunk(msg.data); break;
         case 'filtered': this.callbacks.onFilteredPrompt(msg.text, msg.reason); break;
         case 'error': this.callbacks.onError(msg.message); break;
-        case 'ended': this.callbacks.onEnded(msg.reason); break;
+        case 'ended': this.callbacks.onEnded(msg.reason, !!msg.upsell); break;
         case 'shared': this.callbacks.onShared(msg.path); break;
         case 'share-error': this.callbacks.onShareError(msg.message); break;
+        case 'session-limit': this.callbacks.onSessionLimit?.(msg.minutes); break;
       }
     };
     this.ws.onclose = () => this.callbacks.onDisconnect();
@@ -81,6 +80,11 @@ export class JamSession {
     }
   }
 
+  /** Authenticates the session (signed-in users get longer jam limits). */
+  sendAuth(token: string): void {
+    this.send({ type: 'auth', token });
+  }
+
   /** Sends the full generation config; reset=true forces a hard transition (BPM/key). */
   sendConfig(config: JamConfig, reset = false): void {
     this.send({
@@ -92,9 +96,6 @@ export class JamSession {
         temperature: config.temperature,
         bpm: config.bpm,
         scale: config.scale !== 'SCALE_UNSPECIFIED' ? config.scale : undefined,
-        muteDrums: config.muteDrums,
-        muteBass: config.muteBass,
-        onlyBassAndDrums: config.muteOther,
       },
     });
   }
@@ -126,15 +127,34 @@ export const JAM_SCALES: { value: string; label: string }[] = [
   { value: 'B_MAJOR_A_FLAT_MINOR', label: 'B maj / G♯ min' },
 ];
 
-// Suggestion chips drawn from the official Lyria RealTime prompt guide.
-export const JAM_SUGGESTIONS: string[] = [
-  'Disco Funk', 'Drumline', 'Tabla', 'Oud', 'Grime', 'Psychedelic', '60s Soul',
-  'Warm Acoustic Guitar', 'Boomy Bass', 'Harmonica', 'Indie Pop', 'Delta Blues', 'Fiddle',
-  'Lo-Fi Hip Hop', 'Minimal Techno', 'Bluegrass', 'Jazz Fusion', 'Reggaeton', 'Synthpop',
-  '303 Acid Bass', 'Rhodes Piano', 'Steel Drum', 'Sitar', 'Marimba', 'Moog Oscillations',
-  'Deep House', 'Afrobeat', 'Bossa Nova', 'Trap Beat', 'Celtic Folk', 'Chiptune',
-  'Dreamy', 'Funky', 'Chill', 'Danceable', 'Upbeat', 'Ethereal Ambience', 'Tight Groove',
-  'Smooth Pianos', 'Spacey Synths', 'Funk Drums', 'Salsa', 'Surf Rock', 'Ominous Drone',
+// Instrument and style catalogs from the official Lyria RealTime prompt guide.
+export const JAM_INSTRUMENTS: string[] = [
+  '303 Acid Bass', '808 Hip Hop Beat', 'Accordion', 'Alto Saxophone', 'Bagpipes',
+  'Balalaika Ensemble', 'Banjo', 'Bass Clarinet', 'Bongos', 'Boomy Bass', 'Bouzouki',
+  'Buchla Synths', 'Cello', 'Charango', 'Clavichord', 'Conga Drums', 'Didgeridoo',
+  'Dirty Synths', 'Djembe', 'Drumline', 'Dulcimer', 'Fiddle', 'Flamenco Guitar',
+  'Funk Drums', 'Glockenspiel', 'Guitar', 'Hang Drum', 'Harmonica', 'Harp',
+  'Harpsichord', 'Hurdy-gurdy', 'Kalimba', 'Koto', 'Lyre', 'Mandolin', 'Maracas',
+  'Marimba', 'Mbira', 'Mellotron', 'Metallic Twang', 'Moog Oscillations', 'Ocarina',
+  'Persian Tar', 'Pipa', 'Precision Bass', 'Ragtime Piano', 'Rhodes Piano', 'Shamisen',
+  'Shredding Guitar', 'Sitar', 'Slide Guitar', 'Smooth Pianos', 'Spacey Synths',
+  'Steel Drum', 'Synth Pads', 'Tabla', 'TR-909 Drum Machine', 'Trumpet', 'Tuba',
+  'Vibraphone', 'Viola Ensemble', 'Warm Acoustic Guitar', 'Woodwinds',
+];
+
+export const JAM_STYLES: string[] = [
+  'Acid Jazz', 'Afrobeat', 'Alternative Country', 'Baroque', 'Bengal Baul', 'Bhangra',
+  'Bluegrass', 'Blues Rock', 'Bossa Nova', 'Breakbeat', 'Celtic Folk', 'Chillout',
+  'Chiptune', 'Classic Rock', 'Contemporary R&B', 'Cumbia', 'Deep House', 'Disco Funk',
+  'Drum & Bass', 'Dubstep', 'EDM', 'Electro Swing', 'Funk Metal', 'G-funk',
+  'Garage Rock', 'Glitch Hop', 'Grime', 'Hyperpop', 'Indian Classical',
+  'Indie Electronic', 'Indie Folk', 'Indie Pop', 'Irish Folk', 'Jam Band',
+  'Jamaican Dub', 'Jazz Fusion', 'Latin Jazz', 'Lo-Fi Hip Hop', 'Marching Band',
+  'Merengue', 'Minimal Techno', 'Moombahton', 'Neo-Soul', 'New Jack Swing',
+  'Orchestral Score', 'Piano Ballad', 'Polka', 'Post-Punk', '60s Psychedelic Rock',
+  'Psytrance', 'R&B', 'Reggae', 'Reggaeton', 'Renaissance Music', 'Salsa', 'Shoegaze',
+  'Ska', 'Surf Rock', 'Synthpop', 'Techno', 'Trance', 'Trap Beat', 'Trip Hop',
+  'Vaporwave', 'Witch House',
 ];
 
 export const JAM_PROMPT_COLORS = [

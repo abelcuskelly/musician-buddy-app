@@ -8,6 +8,7 @@ import { GoogleAuth, Impersonated } from 'google-auth-library';
 import { initializeApp as initializeAdminApp, getApps as getAdminApps, App as AdminApp } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { getStorage as getAdminStorage } from 'firebase-admin/storage';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { getSystemInstruction } from './constants.js';
 import { Profile, Message, SavedItemType } from './types.js';
 
@@ -589,7 +590,11 @@ app.get('*', (req, res) => {
 // injected from Secret Manager and never leaves the server.
 const JAM_API_KEY = process.env.GEMINI_API_KEY;
 const JAM_MODEL = process.env.LYRIA_REALTIME_MODEL || 'models/lyria-realtime-exp';
-const JAM_MAX_SESSION_MS = 30 * 60 * 1000; // cost guard: auto-end after 30 min
+// Cost guards: guests get a 5-minute taste; signed-in users get 30 minutes.
+const JAM_GUEST_SESSION_MS = 5 * 60 * 1000;
+const JAM_USER_SESSION_MS = 30 * 60 * 1000;
+const JAM_GUEST_END_MESSAGE = "You've reached the 5-minute guest jam limit. Create a free account to jam for up to 30 minutes at a time!";
+const JAM_USER_END_MESSAGE = 'Jam session reached the 30-minute limit — start a new jam to keep playing!';
 const JAM_MAX_CONCURRENT = 8;
 const JAM_SAMPLE_RATE = 48000;
 const JAM_BYTES_PER_SECOND = JAM_SAMPLE_RATE * 2 /* channels */ * 2 /* bytes */;
@@ -647,7 +652,7 @@ const handleJamConnection = async (ws: WebSocket): Promise<void> => {
   let lastPrompts: { text: string; weight: number }[] = [];
   let lastConfig: Record<string, unknown> = {};
 
-  const cleanup = (reason?: string) => {
+  const cleanup = (reason?: string, upsell = false) => {
     if (closed) return;
     closed = true;
     activeJamSessions--;
@@ -655,15 +660,16 @@ const handleJamConnection = async (ws: WebSocket): Promise<void> => {
     clearInterval(keepAlive);
     try { lyria?.stop(); lyria?.close(); } catch { /* already closed */ }
     if (ws.readyState === WebSocket.OPEN) {
-      if (reason) sendJson(ws, { type: 'ended', reason });
+      if (reason) sendJson(ws, { type: 'ended', reason, upsell });
       ws.close();
     }
   };
 
-  const sessionTimer = setTimeout(
-    () => cleanup('Jam session reached the 30-minute limit — start a new jam to keep playing!'),
-    JAM_MAX_SESSION_MS,
-  );
+  // Sessions start on the guest clock; a verified sign-in upgrades to the
+  // 30-minute limit (see the 'auth' message handler below).
+  let isSignedIn = false;
+  let sessionTimer = setTimeout(() => cleanup(JAM_GUEST_END_MESSAGE, true), JAM_GUEST_SESSION_MS);
+
   const keepAlive = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
   }, 30_000);
@@ -717,6 +723,19 @@ const handleJamConnection = async (ws: WebSocket): Promise<void> => {
 
     try {
       switch (msg.type) {
+        case 'auth': {
+          if (isSignedIn || !adminApp || typeof msg.token !== 'string') break;
+          try {
+            await getAdminAuth(adminApp).verifyIdToken(msg.token);
+            isSignedIn = true;
+            clearTimeout(sessionTimer);
+            sessionTimer = setTimeout(() => cleanup(JAM_USER_END_MESSAGE), JAM_USER_SESSION_MS);
+            sendJson(ws, { type: 'session-limit', minutes: 30 });
+          } catch {
+            // Invalid/expired token: stay on the guest clock.
+          }
+          break;
+        }
         case 'prompts': {
           const prompts = (Array.isArray(msg.prompts) ? msg.prompts : [])
             .filter((p: any) => typeof p.text === 'string' && p.text.trim() && typeof p.weight === 'number' && p.weight > 0)

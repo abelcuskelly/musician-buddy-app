@@ -27,7 +27,11 @@ const App: React.FC = () => {
   }
 
   if (path === '/jam') {
-    return <JamMode onEndJam={() => navigate('/')} />;
+    return (
+      <AuthProvider>
+        <JamMode onEndJam={() => navigate('/')} />
+      </AuthProvider>
+    );
   }
 
   return (

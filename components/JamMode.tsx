@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { JamSession, JamPrompt, JamConfig, JAM_SCALES, JAM_SUGGESTIONS, JAM_PROMPT_COLORS } from '../lib/jamSession.ts';
+import { JamSession, JamPrompt, JamConfig, JAM_SCALES, JAM_INSTRUMENTS, JAM_STYLES, JAM_PROMPT_COLORS } from '../lib/jamSession.ts';
 import { JamAudioPlayer } from '../lib/jamAudio.ts';
 import { copyToClipboard } from '../lib/share.ts';
+import { useAuth } from '../context/AuthContext.tsx';
+import AuthModal from './AuthModal.tsx';
 import CloseIcon from './icons/CloseIcon.tsx';
 import InfoIcon from './icons/InfoIcon.tsx';
 import PlayIcon from './icons/PlayIcon.tsx';
@@ -23,17 +25,14 @@ const DEFAULT_CONFIG: JamConfig = {
   temperature: 1.1,
   bpm: undefined,
   scale: 'SCALE_UNSPECIFIED',
-  muteDrums: false,
-  muteBass: false,
-  muteOther: false,
 };
 
 const JAM_CONTROLS_INFO: { name: string; description: string }[] = [
-  { name: 'Add a Prompt', description: 'Add a musical instrument, genre, mood, etc. as a slider — blend up to 10 to shape the jam.' },
+  { name: 'Add a Prompt', description: 'Add a musical instrument, genre, mood, etc. as a slider — blend up to 10 to shape the jam. Use the Instruments and Music Styles pickers for ideas.' },
+  { name: 'Volume (− / +)', description: 'Nudge how loud each instrument or style sits in the mix (fine control over its slider weight).' },
   { name: 'Density', description: 'Make the music smooth or punchy.' },
   { name: 'Brightness', description: 'Adjust the tone.' },
   { name: 'Chaos', description: 'Make the music random or repetitive.' },
-  { name: 'Drums, bass, and other', description: 'Mute specific instruments.' },
   { name: 'BPM', description: 'Set the tempo (restarts the music).' },
   { name: 'Key', description: 'Set the key center (restarts the music).' },
   { name: 'Share', description: 'Shares a URL with the last minute of your jam.' },
@@ -48,9 +47,8 @@ const makePrompt = (text: string, weight = 1.0): JamPrompt => ({
   color: JAM_PROMPT_COLORS[promptIdCounter % JAM_PROMPT_COLORS.length],
 });
 
-const shuffle = <T,>(items: T[]): T[] => [...items].sort(() => Math.random() - 0.5);
-
 const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
+  const { user } = useAuth();
   const [status, setStatus] = useState<JamStatus>('connecting');
   const [prompts, setPrompts] = useState<JamPrompt[]>(() => [
     makePrompt('Warm Acoustic Guitar', 1.2),
@@ -58,14 +56,17 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
   ]);
   const [config, setConfig] = useState<JamConfig>(DEFAULT_CONFIG);
   const [newPromptText, setNewPromptText] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>(() => shuffle(JAM_SUGGESTIONS).slice(0, 8));
+  const [openPicker, setOpenPicker] = useState<'instruments' | 'styles' | null>(null);
   const [volume, setVolume] = useState(0.9);
   const [notice, setNotice] = useState<string | null>(null);
   const [endedReason, setEndedReason] = useState<string | null>(null);
+  const [endedUpsell, setEndedUpsell] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isBpmOpen, setIsBpmOpen] = useState(false);
   const [pendingBpm, setPendingBpm] = useState(120);
   const [shareState, setShareState] = useState<'idle' | 'sharing' | 'copied'>('idle');
+  const authSentRef = useRef(false);
 
   const sessionRef = useRef<JamSession | null>(null);
   const playerRef = useRef<JamAudioPlayer | null>(null);
@@ -94,8 +95,9 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
         setNotice(`"${text}" was skipped by the music safety filter${reason ? `: ${reason}` : ''}. (Tip: describe sounds and styles rather than artist names.)`);
       },
       onError: (message) => setNotice(message),
-      onEnded: (reason) => {
+      onEnded: (reason, upsell) => {
         setEndedReason(reason || 'The jam session ended.');
+        setEndedUpsell(!!upsell);
         setStatus('ended');
         playerRef.current?.flush();
       },
@@ -132,6 +134,16 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Signed-in users get a longer session limit: prove it to the server with a
+  // Firebase ID token as soon as both the session and the user are ready.
+  useEffect(() => {
+    if (!user || status === 'connecting' || status === 'ended' || authSentRef.current) return;
+    authSentRef.current = true;
+    user.getIdToken()
+      .then(token => sessionRef.current?.sendAuth(token))
+      .catch(() => { authSentRef.current = false; });
+  }, [user, status]);
 
   // --- Waveform visualization ---
   useEffect(() => {
@@ -196,12 +208,20 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
     configRef.current = next;
     setConfig(next);
     if (reset) {
-      // BPM/key changes apply immediately with a context reset (hard transition).
+      // BPM/key changes apply immediately with a context reset. The client
+      // intentionally does NOT flush its buffer: the ~2.5s of audio streamed
+      // ahead keeps playing while the model recalibrates, so the transition
+      // is a smooth handoff instead of a silent gap.
       sessionRef.current?.sendConfig(next, true);
-      playerRef.current?.flush();
     } else {
       queueSend(true);
     }
+  };
+
+  const nudgeWeight = (id: string, delta: number) => {
+    const prompt = promptsRef.current.find(p => p.id === id);
+    if (!prompt) return;
+    updatePrompt(id, { weight: Math.min(Math.max(Math.round((prompt.weight + delta) * 100) / 100, 0.05), 2) });
   };
 
   // --- Transport ---
@@ -298,6 +318,29 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
                   {prompt.filteredReason && <span className="ml-2 text-xs text-[#f38ba8] font-normal">blocked by safety filter</span>}
                 </span>
                 <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5 mr-1.5 bg-[#11111b] rounded-full px-1 py-0.5 border border-gray-700/40">
+                    <button
+                      onClick={() => nudgeWeight(prompt.id, -0.25)}
+                      disabled={prompt.muted || !!prompt.filteredReason || prompt.weight <= 0.05}
+                      className="w-6 h-6 rounded-full hover:bg-white/10 text-gray-300 text-sm font-bold disabled:opacity-30 transition-colors"
+                      aria-label={`Lower ${prompt.text} volume in the mix`}
+                      title="Quieter in the mix"
+                    >
+                      −
+                    </button>
+                    <span className="text-xs text-gray-400 font-mono w-8 text-center" aria-hidden="true">
+                      {Math.round((prompt.muted ? 0 : prompt.weight) * 50)}%
+                    </span>
+                    <button
+                      onClick={() => nudgeWeight(prompt.id, 0.25)}
+                      disabled={prompt.muted || !!prompt.filteredReason || prompt.weight >= 2}
+                      className="w-6 h-6 rounded-full hover:bg-white/10 text-gray-300 text-sm font-bold disabled:opacity-30 transition-colors"
+                      aria-label={`Raise ${prompt.text} volume in the mix`}
+                      title="Louder in the mix"
+                    >
+                      +
+                    </button>
+                  </div>
                   <button
                     onClick={() => removePrompt(prompt.id)}
                     className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-[#f38ba8] transition-colors"
@@ -340,25 +383,49 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
             </button>
           </form>
 
-          {/* Suggestion chips */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setSuggestions(shuffle(JAM_SUGGESTIONS).slice(0, 8))}
-              className="px-3 py-1.5 rounded-full bg-[#313244] hover:bg-[#45475a] text-[#cdd6f4] text-xs font-medium transition-colors"
-            >
-              ↻ more
-            </button>
-            {suggestions.map(s => (
+          {/* Instrument / style pickers */}
+          <div className="flex items-center gap-2">
+            {([
+              { id: 'instruments', label: '+ Instruments' },
+              { id: 'styles', label: '+ Music Styles' },
+            ] as const).map(picker => (
               <button
-                key={s}
-                onClick={() => addPrompt(s)}
-                disabled={prompts.length >= 10}
-                className="px-3 py-1.5 rounded-full bg-[#181825] border border-gray-700/50 hover:border-[#89b4fa]/60 text-gray-300 text-xs transition-colors disabled:opacity-40"
+                key={picker.id}
+                onClick={() => setOpenPicker(openPicker === picker.id ? null : picker.id)}
+                className={`flex-1 px-3 py-2 rounded-xl text-sm font-medium transition-colors border ${
+                  openPicker === picker.id
+                    ? 'bg-[#89b4fa]/15 border-[#89b4fa]/60 text-[#89b4fa]'
+                    : 'bg-[#181825] border-gray-700/50 text-[#cdd6f4] hover:border-[#89b4fa]/40'
+                }`}
+                aria-expanded={openPicker === picker.id}
               >
-                {s.toLowerCase()}
+                {picker.label} {openPicker === picker.id ? '▴' : '▾'}
               </button>
             ))}
           </div>
+          {openPicker && (
+            <div className="bg-[#181825] border border-gray-700/50 rounded-xl p-3 max-h-[38vh] overflow-y-auto">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                {(openPicker === 'instruments' ? JAM_INSTRUMENTS : JAM_STYLES).map(option => {
+                  const alreadyAdded = prompts.some(p => p.text.toLowerCase() === option.toLowerCase());
+                  return (
+                    <button
+                      key={option}
+                      onClick={() => addPrompt(option)}
+                      disabled={alreadyAdded || prompts.length >= 10}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                        alreadyAdded
+                          ? 'bg-[#a6e3a1]/10 text-[#a6e3a1] cursor-default'
+                          : 'bg-[#11111b] border border-gray-700/40 text-gray-300 hover:border-[#89b4fa]/50 disabled:opacity-40'
+                      }`}
+                    >
+                      {alreadyAdded ? `✓ ${option}` : option}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </main>
 
         {/* Control dock */}
@@ -383,27 +450,6 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
                 />
                 <span className="text-xs text-gray-400 mt-1 block">{ctl.label}</span>
               </div>
-            ))}
-          </div>
-
-          <div className="flex items-center justify-center gap-2">
-            {([
-              { label: 'Drums', key: 'muteDrums' },
-              { label: 'Bass', key: 'muteBass' },
-              { label: 'Other', key: 'muteOther' },
-            ] as const).map(m => (
-              <button
-                key={m.key}
-                onClick={() => updateConfig({ [m.key]: !config[m.key] } as Partial<JamConfig>)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  config[m.key] ? 'bg-[#f38ba8]/20 text-[#f38ba8]' : 'bg-[#313244] text-[#a6e3a1] hover:bg-[#45475a]'
-                }`}
-                aria-pressed={config[m.key]}
-                title={config[m.key] ? `Unmute ${m.label.toLowerCase()}` : `Mute ${m.label.toLowerCase()}`}
-              >
-                <VolumeIcon className="w-3.5 h-3.5" muted={config[m.key]} />
-                {m.label}
-              </button>
             ))}
           </div>
 
@@ -498,7 +544,15 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
           <div className="bg-[#1e1e2e] rounded-2xl border border-gray-700/50 p-8 max-w-md text-center">
             <h2 className="text-xl font-bold text-[#cdd6f4] mb-2">Jam ended</h2>
             <p className="text-sm text-gray-400 mb-6">{endedReason}</p>
-            <div className="flex justify-center gap-3">
+            <div className="flex justify-center gap-3 flex-wrap">
+              {endedUpsell && !user && (
+                <button
+                  onClick={() => setIsAuthOpen(true)}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-br from-[#a6e3a1] to-[#94e2d5] text-gray-900 font-semibold hover:opacity-90 transition-opacity"
+                >
+                  Create Free Account
+                </button>
+              )}
               <button
                 onClick={() => window.location.reload()}
                 className="px-4 py-2 rounded-lg bg-gradient-to-br from-[#89b4fa] to-[#b4befe] text-gray-900 font-semibold hover:opacity-90 transition-opacity"
@@ -515,6 +569,8 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
           </div>
         </div>
       )}
+
+      <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
 
       {/* Jam Controls info modal */}
       {isInfoOpen && (
