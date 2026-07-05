@@ -3,7 +3,11 @@ import { JamSession, JamPrompt, JamConfig, JAM_SCALES, JAM_INSTRUMENTS, JAM_STYL
 import { JamAudioPlayer } from '../lib/jamAudio.ts';
 import { copyToClipboard } from '../lib/share.ts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { saveJamPreset, listJamPresets, deleteJamPreset, JamMixPreset } from '../services/jamPresets.ts';
+import { listLibraryItems } from '../services/library.ts';
+import { SavedItem } from '../types.ts';
 import AuthModal from './AuthModal.tsx';
+import JamSheet from './JamSheet.tsx';
 import CloseIcon from './icons/CloseIcon.tsx';
 import InfoIcon from './icons/InfoIcon.tsx';
 import PlayIcon from './icons/PlayIcon.tsx';
@@ -12,6 +16,9 @@ import TrashIcon from './icons/TrashIcon.tsx';
 import ShareIcon from './icons/ShareIcon.tsx';
 import VolumeIcon from './icons/VolumeIcon.tsx';
 import CheckIcon from './icons/CheckIcon.tsx';
+import BookmarkIcon from './icons/BookmarkIcon.tsx';
+import LibraryIcon from './icons/LibraryIcon.tsx';
+import MusicNoteIcon from './icons/MusicNoteIcon.tsx';
 
 interface JamModeProps {
   onEndJam: () => void;
@@ -39,11 +46,11 @@ const JAM_CONTROLS_INFO: { name: string; description: string }[] = [
 ];
 
 let promptIdCounter = 0;
-const makePrompt = (text: string, weight = 1.0): JamPrompt => ({
+const makePrompt = (text: string, weight = 1.0, muted = false): JamPrompt => ({
   id: `jp-${++promptIdCounter}`,
   text,
   weight,
-  muted: false,
+  muted,
   color: JAM_PROMPT_COLORS[promptIdCounter % JAM_PROMPT_COLORS.length],
 });
 
@@ -67,6 +74,18 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
   const [pendingBpm, setPendingBpm] = useState(120);
   const [shareState, setShareState] = useState<'idle' | 'sharing' | 'copied'>('idle');
   const authSentRef = useRef(false);
+  // Play-along sheet + saved mixes + song-seeded jams
+  const [sheet, setSheet] = useState<string | null>(null);
+  const [showSheet, setShowSheet] = useState(false);
+  const [sheetLoading, setSheetLoading] = useState(false);
+  const [mixesOpen, setMixesOpen] = useState(false);
+  const [presets, setPresets] = useState<JamMixPreset[]>([]);
+  const [presetName, setPresetName] = useState('');
+  const [presetBusy, setPresetBusy] = useState(false);
+  const [songsOpen, setSongsOpen] = useState(false);
+  const [songs, setSongs] = useState<SavedItem[]>([]);
+  const [songsLoading, setSongsLoading] = useState(false);
+  const [seedingId, setSeedingId] = useState<string | null>(null);
 
   const sessionRef = useRef<JamSession | null>(null);
   const playerRef = useRef<JamAudioPlayer | null>(null);
@@ -260,6 +279,132 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
     onEndJam();
   };
 
+  // --- Play-along sheet ---
+  const handleSheetToggle = async () => {
+    if (showSheet) {
+      setShowSheet(false);
+      return;
+    }
+    if (sheet) {
+      setShowSheet(true);
+      return;
+    }
+    setSheetLoading(true);
+    try {
+      const response = await fetch('/api/jam/sheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompts: promptsRef.current.filter(p => !p.muted).map(p => ({ text: p.text, weight: p.weight })),
+          bpm: configRef.current.bpm,
+          scale: configRef.current.scale !== 'SCALE_UNSPECIFIED' ? configRef.current.scale : undefined,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error?.message || 'Could not generate a chord sheet.');
+      setSheet(data.sheet);
+      setShowSheet(true);
+    } catch (e: any) {
+      setNotice(e.message || 'Could not generate a chord sheet.');
+    } finally {
+      setSheetLoading(false);
+    }
+  };
+
+  // --- Saved mixes (presets) ---
+  const handleOpenMixes = async () => {
+    if (!user) {
+      setNotice('Sign in to save and load your jam mixes.');
+      setIsAuthOpen(true);
+      return;
+    }
+    setMixesOpen(true);
+    try {
+      setPresets(await listJamPresets(user.uid));
+    } catch (e: any) {
+      setNotice(e.message || 'Could not load your saved mixes.');
+    }
+  };
+
+  const handleSavePreset = async () => {
+    if (!user || presetBusy) return;
+    setPresetBusy(true);
+    try {
+      const preset = await saveJamPreset(user.uid, presetName || 'My Mix', promptsRef.current, configRef.current);
+      setPresets(prev => [preset, ...prev]);
+      setPresetName('');
+    } catch (e: any) {
+      setNotice(e.message || 'Could not save the mix.');
+    } finally {
+      setPresetBusy(false);
+    }
+  };
+
+  const handleLoadPreset = (preset: JamMixPreset) => {
+    setPrompts(preset.prompts.map(p => makePrompt(p.text, p.weight, p.muted)));
+    updateConfig({ ...DEFAULT_CONFIG, ...preset.config }, true);
+    queueSend(false);
+    setMixesOpen(false);
+  };
+
+  const handleDeletePreset = async (preset: JamMixPreset) => {
+    if (!user) return;
+    try {
+      await deleteJamPreset(user.uid, preset.id);
+      setPresets(prev => prev.filter(p => p.id !== preset.id));
+    } catch (e: any) {
+      setNotice(e.message || 'Could not delete the mix.');
+    }
+  };
+
+  // --- Jam from a saved song ---
+  const handleOpenSongs = async () => {
+    if (!user) {
+      setNotice('Sign in to jam over songs from your library.');
+      setIsAuthOpen(true);
+      return;
+    }
+    setSongsOpen(true);
+    setSongsLoading(true);
+    try {
+      const items = await listLibraryItems(user.uid);
+      setSongs(items.filter(item => (item.type === 'song' || item.type === 'audio') && item.content.trim().length > 0));
+    } catch (e: any) {
+      setNotice(e.message || 'Could not load your songs.');
+    } finally {
+      setSongsLoading(false);
+    }
+  };
+
+  const handleUseSong = async (item: SavedItem) => {
+    if (seedingId) return;
+    setSeedingId(item.id);
+    try {
+      const response = await fetch('/api/jam/seed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: item.title, content: item.content }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error?.message || 'Could not derive jam settings from that song.');
+
+      setPrompts(data.prompts.map((p: { text: string; weight: number }) => makePrompt(p.text, p.weight)));
+      updateConfig(
+        { bpm: data.bpm ?? configRef.current.bpm, scale: data.scale ?? 'SCALE_UNSPECIFIED' },
+        true,
+      );
+      queueSend(false);
+      setSheet(item.content);
+      setShowSheet(true);
+      setSongsOpen(false);
+      setNotice(`Jamming over "${item.title}" — the play-along sheet is on screen.`);
+    } catch (e: any) {
+      setNotice(e.message || 'Could not use that song.');
+    } finally {
+      setSeedingId(null);
+    }
+  };
+
   const activeCount = prompts.filter(p => !p.muted && !p.filteredReason).length;
 
   return (
@@ -279,12 +424,30 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
               <InfoIcon className="w-5 h-5" />
             </button>
           </div>
-          <button
-            onClick={handleEndJam}
-            className="px-4 py-2 rounded-lg bg-gradient-to-br from-[#f38ba8] to-[#eba0ac] text-gray-900 font-semibold hover:opacity-90 transition-opacity"
-          >
-            End Jam
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleOpenMixes}
+              className="p-2 rounded-full hover:bg-white/10 text-[#cba6f7] transition-colors"
+              aria-label="Saved mixes"
+              title="Saved mixes"
+            >
+              <BookmarkIcon className="w-5 h-5" />
+            </button>
+            <button
+              onClick={handleOpenSongs}
+              className="p-2 rounded-full hover:bg-white/10 text-[#94e2d5] transition-colors"
+              aria-label="Jam over one of your songs"
+              title="Jam over one of your songs"
+            >
+              <LibraryIcon className="w-5 h-5" />
+            </button>
+            <button
+              onClick={handleEndJam}
+              className="px-4 py-2 rounded-lg bg-gradient-to-br from-[#f38ba8] to-[#eba0ac] text-gray-900 font-semibold hover:opacity-90 transition-opacity ml-1"
+            >
+              End Jam
+            </button>
+          </div>
         </header>
 
         {notice && (
@@ -428,6 +591,16 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
           )}
         </main>
 
+        {/* Play-along sheet */}
+        {showSheet && sheet && (
+          <JamSheet
+            sheet={sheet}
+            bpm={config.bpm ?? 120}
+            isPlaying={status === 'playing'}
+            onClose={() => setShowSheet(false)}
+          />
+        )}
+
         {/* Control dock */}
         <footer className="bg-[#11111b] border-t border-gray-700/40 rounded-t-3xl px-5 pt-4 pb-5 space-y-4">
           <div className="grid grid-cols-3 gap-4">
@@ -516,6 +689,19 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
             </select>
 
             <button
+              onClick={handleSheetToggle}
+              disabled={sheetLoading}
+              className={`p-2.5 rounded-full transition-colors flex-shrink-0 ${
+                showSheet ? 'bg-[#f9e2af]/20 text-[#f9e2af]' : 'bg-[#313244] hover:bg-[#45475a] text-[#f9e2af]'
+              } ${sheetLoading ? 'animate-pulse' : ''}`}
+              aria-label={showSheet ? 'Hide the play-along sheet' : 'Show a play-along chord sheet'}
+              aria-pressed={showSheet}
+              title={showSheet ? 'Hide play-along sheet' : 'Play-along sheet'}
+            >
+              <MusicNoteIcon className="w-4 h-4" />
+            </button>
+
+            <button
               onClick={handleShare}
               disabled={status === 'connecting' || status === 'ended' || shareState === 'sharing'}
               className={`p-2.5 rounded-full transition-colors flex-shrink-0 ${
@@ -571,6 +757,122 @@ const JamMode: React.FC<JamModeProps> = ({ onEndJam }) => {
       )}
 
       <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
+
+      {/* Saved mixes modal */}
+      {mixesOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          role="dialog" aria-modal="true"
+          onClick={() => setMixesOpen(false)}
+        >
+          <div className="bg-[#1e1e2e] rounded-2xl border border-gray-700/50 w-full max-w-md flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-700/50 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-[#cdd6f4]">Saved Mixes</h2>
+              <button onClick={() => setMixesOpen(false)} className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-[#cdd6f4] transition-colors" aria-label="Close saved mixes">
+                <CloseIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <form
+                onSubmit={(e) => { e.preventDefault(); handleSavePreset(); }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  placeholder="Name this mix (e.g. Sunday Blues)"
+                  className="flex-1 bg-[#313244] border-gray-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-[#89b4fa] focus:outline-none"
+                  aria-label="Mix name"
+                />
+                <button
+                  type="submit"
+                  disabled={presetBusy}
+                  className="px-3 py-2 rounded-lg bg-gradient-to-br from-[#89b4fa] to-[#b4befe] text-gray-900 text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
+                >
+                  {presetBusy ? 'Saving...' : 'Save Current'}
+                </button>
+              </form>
+              {presets.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">No saved mixes yet — dial in a sound you love, then save it here for future sessions.</p>
+              ) : (
+                presets.map(preset => (
+                  <div key={preset.id} className="bg-[#181825] border border-gray-700/40 rounded-xl p-3 flex items-center justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[#cdd6f4] font-medium text-sm truncate">{preset.name}</p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {preset.prompts.map(p => p.text).join(' · ')}
+                        {preset.config.bpm ? ` · ${preset.config.bpm} BPM` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => handleLoadPreset(preset)}
+                        className="px-3 py-1.5 rounded-lg bg-[#313244] hover:bg-[#45475a] text-[#a6e3a1] text-xs font-semibold transition-colors"
+                        aria-label={`Load mix ${preset.name}`}
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => handleDeletePreset(preset)}
+                        className="p-2 rounded-full hover:bg-red-500/20 text-red-400 transition-colors"
+                        aria-label={`Delete mix ${preset.name}`}
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Song picker modal */}
+      {songsOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          role="dialog" aria-modal="true"
+          onClick={() => setSongsOpen(false)}
+        >
+          <div className="bg-[#1e1e2e] rounded-2xl border border-gray-700/50 w-full max-w-md flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-700/50 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-[#cdd6f4]">Jam Over Your Song</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Pick a saved song — the jam takes on its style, tempo, and key, with the chord sheet on screen.</p>
+              </div>
+              <button onClick={() => setSongsOpen(false)} className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-[#cdd6f4] transition-colors" aria-label="Close song picker">
+                <CloseIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-2 overflow-y-auto">
+              {songsLoading ? (
+                <p className="text-sm text-gray-400 text-center py-4">Loading your songs...</p>
+              ) : songs.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">No saved songs yet. Write or generate a song in chat and hit "Save Song" first!</p>
+              ) : (
+                songs.map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => handleUseSong(item)}
+                    disabled={!!seedingId}
+                    className="w-full text-left bg-[#181825] border border-gray-700/40 hover:border-[#89b4fa]/50 rounded-xl p-3 transition-colors disabled:opacity-50"
+                  >
+                    <p className="text-[#cdd6f4] font-medium text-sm truncate">
+                      {seedingId === item.id ? 'Setting up the jam...' : item.title}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {item.type === 'audio' ? 'Generated track' : 'Song sheet'}
+                      {' · '}{new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </p>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Jam Controls info modal */}
       {isInfoOpen && (

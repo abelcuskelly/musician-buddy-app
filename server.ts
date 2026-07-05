@@ -460,6 +460,90 @@ app.post('/api/stt', async (req, res) => {
   }
 });
 
+// --- Jam Mode helpers ---
+
+const JAM_SCALE_ENUMS = [
+  'C_MAJOR_A_MINOR', 'D_FLAT_MAJOR_B_FLAT_MINOR', 'D_MAJOR_B_MINOR', 'E_FLAT_MAJOR_C_MINOR',
+  'E_MAJOR_D_FLAT_MINOR', 'F_MAJOR_D_MINOR', 'G_FLAT_MAJOR_E_FLAT_MINOR', 'G_MAJOR_E_MINOR',
+  'A_FLAT_MAJOR_F_MINOR', 'A_MAJOR_G_FLAT_MINOR', 'B_FLAT_MAJOR_G_MINOR', 'B_MAJOR_A_FLAT_MINOR',
+];
+
+// Derives Lyria RealTime jam settings (weighted style prompts, BPM, key) from
+// a previously written song sheet, so users can jam over their own songs.
+app.post('/api/jam/seed', async (req, res) => {
+  try {
+    const { title, content } = req.body as { title: string; content: string };
+    if (typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({ error: { message: 'No song content provided.' } });
+    }
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      config: { responseMimeType: 'application/json' },
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: `Here is a song sheet titled "${(title || 'Untitled').slice(0, 100)}":\n\n${content.slice(0, 8000)}\n\nA real-time instrumental music generator will play a backing track for this song. It accepts 3-5 short weighted text prompts (instruments, genres, moods — NEVER artist names), a BPM (60-200), and a musical scale.\n\nRespond with ONLY a JSON object:\n{"prompts":[{"text":"<descriptor>","weight":<0.5-1.5>}...],"bpm":<number or null>,"scale":"<one of: ${JAM_SCALE_ENUMS.join(', ')} — or null if unclear>"}\n\nUse the sheet's stated key/tempo when present; otherwise infer from the style. Prompts should recreate the song's vibe and instrumentation.`
+        }]
+      }]
+    });
+
+    const raw = result.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '{}';
+    const parsed = JSON.parse(raw);
+    const prompts = (Array.isArray(parsed.prompts) ? parsed.prompts : [])
+      .filter((p: any) => typeof p.text === 'string' && p.text.trim())
+      .slice(0, 5)
+      .map((p: any) => ({
+        text: p.text.trim().slice(0, 60),
+        weight: Math.min(Math.max(typeof p.weight === 'number' ? p.weight : 1, 0.3), 2),
+      }));
+    if (prompts.length === 0) {
+      return res.status(422).json({ error: { message: "Couldn't derive jam settings from that song. Try another one!" } });
+    }
+
+    res.json({
+      prompts,
+      bpm: typeof parsed.bpm === 'number' ? Math.round(Math.min(Math.max(parsed.bpm, 60), 200)) : null,
+      scale: JAM_SCALE_ENUMS.includes(parsed.scale) ? parsed.scale : null,
+    });
+  } catch (error: any) {
+    console.error('Error in /api/jam/seed:', error);
+    res.status(500).json({ error: { message: error.message || 'Failed to derive jam settings.' } });
+  }
+});
+
+// Generates a simple play-along chord sheet matching the current jam settings
+// (used when the jam wasn't seeded from an existing song).
+app.post('/api/jam/sheet', async (req, res) => {
+  try {
+    const { prompts, bpm, scale } = req.body as { prompts: { text: string; weight: number }[]; bpm?: number; scale?: string };
+    const promptList = (Array.isArray(prompts) ? prompts : [])
+      .filter(p => typeof p.text === 'string')
+      .slice(0, 10)
+      .map(p => p.text.slice(0, 60))
+      .join(', ');
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: `A musician is jamming over a live generated instrumental with this vibe: ${promptList || 'freeform jam'}.${bpm ? ` Tempo: ${bpm} BPM.` : ''}${scale ? ` Scale: ${scale.replace(/_/g, ' ').toLowerCase()}.` : ''}\n\nWrite a simple play-along chord sheet in Markdown they can follow:\n- Start with a "# " heading (a short evocative jam title).\n- One line: Key, BPM (use the given values; pick sensible ones if missing), time signature 4/4.\n- 2-3 short sections labeled [Section A], [Section B], etc.\n- In each section, write 2-4 lines of chord progressions using bracket notation with one chord per bar, e.g. "[G]  [C]  [Em]  [D]". Use 4 chords per line.\n- Keep chords diatonic to the key and easy to play.\n- Output ONLY the sheet, no commentary.`
+        }]
+      }]
+    });
+
+    const sheet = result.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+    if (!sheet.trim()) {
+      return res.status(502).json({ error: { message: 'Could not generate a chord sheet right now.' } });
+    }
+    res.json({ sheet });
+  } catch (error: any) {
+    console.error('Error in /api/jam/sheet:', error);
+    res.status(500).json({ error: { message: error.message || 'Failed to generate the chord sheet.' } });
+  }
+});
+
 // --- Public sharing ---
 // Content is written with the Admin SDK (bypasses security rules), and read
 // back only through these endpoints, so no public Firestore/Storage access

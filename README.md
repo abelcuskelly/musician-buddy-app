@@ -15,7 +15,7 @@ This application is built with a secure, scalable architecture designed for prod
 *   **Personal Library:** Save generated lesson plans, songs, and audio clips to your profile, then browse, play, re-download, or delete them from any device. Lesson plans and songs can also be downloaded as Markdown files.
 *   **Lyric & Chord Sheets:** Every song written in chat is notated with chords inline, and every generated audio track comes with its own lyric & chord sheet that can be downloaded or saved.
 *   **Sharing:** One click creates a public link (e.g. `/share/abc123`) for any lesson plan, song sheet, or audio track. The share page plays the audio and displays the sheet — shared songs always include their lyrics + chords.
-*   **Jam Mode:** Hit "Jam Now" for an endless, steerable live backing track powered by Lyria RealTime. Blend up to 10 weighted prompts (instruments, genres, moods) with MusicFX-DJ-style sliders, shape the sound with Density/Brightness/Chaos, mute drums/bass/other, set BPM and key, and share a link to the last minute of your jam.
+*   **Jam Mode:** Hit "Jam Now" for an endless, steerable live backing track powered by Lyria RealTime. Blend up to 10 weighted prompts from the Instruments and Music Styles pickers with MusicFX-DJ-style sliders and per-prompt volume nudges, shape the sound with Density/Brightness/Chaos, set BPM and key (with smooth, gapless transitions), save your favorite mixes to reuse, jam over a song from your library with its chord sheet on screen, follow a beat-synced play-along sheet, and share a link to the last minute of your jam. Guests can jam 5 minutes per session; signed-in users get 30.
 
 ## Tech Stack
 
