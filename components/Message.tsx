@@ -17,10 +17,12 @@ interface MessageProps {
   onRequireSignIn: () => void;
 }
 
-const SAVE_LABELS: Record<string, string> = {
-  'lesson-plan': 'Save Lesson Plan',
-  song: 'Save Song',
-  audio: 'Save Audio',
+// Every action button names what it acts on, so a lesson plan never shows
+// song-related buttons and vice versa.
+const TYPE_LABELS: Record<string, { save: string; download: string; share: string }> = {
+  'lesson-plan': { save: 'Save Lesson Plan', download: 'Download Lesson Plan', share: 'Share Lesson Plan' },
+  song: { save: 'Save Song', download: 'Download Song Sheet', share: 'Share Song' },
+  audio: { save: 'Save Audio', download: 'Download Sheet', share: 'Share Audio' },
 };
 
 const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
@@ -128,7 +130,7 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                   aria-label="Download as Markdown"
                 >
                   <DownloadIcon className="w-3.5 h-3.5" />
-                  {savedType === 'audio' ? 'Download Sheet' : 'Download'}
+                  {TYPE_LABELS[savedType].download}
                 </button>
                 <button
                   onClick={handleSave}
@@ -148,11 +150,11 @@ const Message: React.FC<MessageProps> = ({ message, onRequireSignIn }) => {
                   ) : (
                     <>
                       <BookmarkIcon className="w-3.5 h-3.5" filled={false} />
-                      {saveState === 'saving' ? 'Saving...' : SAVE_LABELS[savedType]}
+                      {saveState === 'saving' ? 'Saving...' : TYPE_LABELS[savedType].save}
                     </>
                   )}
                 </button>
-                <ShareButton getPayload={getSharePayload} />
+                <ShareButton getPayload={getSharePayload} label={TYPE_LABELS[savedType].share} />
                 {saveState === 'error' && (
                   <span className="text-xs text-red-400">Couldn't save. Please try again.</span>
                 )}

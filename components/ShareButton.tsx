@@ -10,11 +10,13 @@ interface ShareButtonProps {
   iconClassName?: string;
   /** Compact mode renders just the icon (for tight toolbars like the library list). */
   compact?: boolean;
+  /** Button text; defaults to "Share" (e.g. "Share Lesson Plan"). */
+  label?: string;
 }
 
 type ShareState = 'idle' | 'sharing' | 'copied' | 'error';
 
-const ShareButton: React.FC<ShareButtonProps> = ({ getPayload, className, iconClassName, compact }) => {
+const ShareButton: React.FC<ShareButtonProps> = ({ getPayload, className, iconClassName, compact, label = 'Share' }) => {
   const [state, setState] = useState<ShareState>('idle');
   const [shareUrl, setShareUrl] = useState<string | null>(null);
 
@@ -70,7 +72,7 @@ const ShareButton: React.FC<ShareButtonProps> = ({ getPayload, className, iconCl
       aria-label="Share link"
     >
       {icon}
-      {state === 'sharing' ? 'Creating link...' : state === 'copied' ? 'Link Copied!' : state === 'error' ? 'Share Failed' : 'Share'}
+      {state === 'sharing' ? 'Creating link...' : state === 'copied' ? 'Link Copied!' : state === 'error' ? 'Share Failed' : label}
     </button>
   );
 };

@@ -27,17 +27,19 @@ export const classifyMessage = (message: Message): SavedItemType | null => {
   if (message.audioData) return 'audio';
   const content = message.content;
 
-  const sectionTags = content.match(SONG_SECTION_TAG)?.length ?? 0;
-  const chordTokens = content.match(CHORD_TOKEN)?.length ?? 0;
-  if (sectionTags >= 2 || chordTokens >= 4 || (sectionTags >= 1 && chordTokens >= 2)) {
-    return 'song';
-  }
-
+  // Lesson-plan structure is checked FIRST: plans frequently contain chord
+  // tokens like [G] [Em] in their exercises, and must not be labeled "song".
   if (content.length >= MIN_LESSON_PLAN_LENGTH) {
     const scheduleHeadings = content.match(SCHEDULE_HEADING)?.length ?? 0;
     if (scheduleHeadings >= 2 || PLAN_TITLE_HEADING.test(content)) {
       return 'lesson-plan';
     }
+  }
+
+  const sectionTags = content.match(SONG_SECTION_TAG)?.length ?? 0;
+  const chordTokens = content.match(CHORD_TOKEN)?.length ?? 0;
+  if (sectionTags >= 2 || chordTokens >= 4 || (sectionTags >= 1 && chordTokens >= 2)) {
+    return 'song';
   }
 
   return null;

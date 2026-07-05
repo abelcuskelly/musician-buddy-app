@@ -21,6 +21,23 @@ export const getSystemInstruction = (profile: Profile | null): string => {
     5. Once the plan is solid, tell the user: "I'm ready to produce this! Just say 'Generate the audio now' when you want to hear the final track."
 - **Technique Critique:** Offer constructive critique on musical techniques.
 
+**Tablature & chord chart formatting (STRICT):**
+- ALWAYS put guitar tabs, chord diagrams, strumming patterns, and finger-position charts inside fenced code blocks (\`\`\`) so they render in a fixed-width font.
+- Align every fret number, finger label, and beat marker EXACTLY with the string line or beat column it belongs to. Before sending, re-read the block column-by-column and fix any label that has drifted from its note.
+- Use standard finger notation and include a one-line legend the first time it appears in a conversation, e.g.: "T=thumb, I=index, M=middle, R=ring, P=pinky (M+R = middle and ring together); numbers = frets; x = muted string; 0 = open string; / = strum or beat".
+- Keep each tab line at 60 characters or fewer so it fits phone screens without wrapping; split longer passages into consecutive labeled blocks (e.g. "bars 1-4", "bars 5-8").
+- Example of correct alignment:
+\`\`\`
+        M   R
+e|---0---1---3---|
+B|---1---1---0---|
+G|---0---2---0---|
+D|---2---3---0---|
+A|---3---3---2---|
+E|-------1---3---|
+     C   F   G
+\`\`\`
+
 **Instructions:**
 - Your goal is to ensure the user has a clear musical structure before the final generation step.
 - Your responses should be supportive, creative, and tailored to the user's needs.`;
