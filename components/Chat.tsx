@@ -34,7 +34,7 @@ const Chat: React.FC<ChatProps> = ({ onStartJam }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const spokenIdsRef = useRef<Set<string>>(new Set());
-  const sessionIdRef = useRef(`chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const sessionIdRef = useRef(`chat-${Date.now()}-${crypto.randomUUID()}`);
   const chatSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-save the session to the signed-in user's chat history (debounced).
